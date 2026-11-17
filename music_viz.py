@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""
+music_viz.py - turn an audio file into a glowing, beat-driven MP4.
+
+Usage:
+    python music_viz.py song.mp3
+    python music_viz.py song.mp3 -o song_viz.mp4 --size 1280x720 --fps 30
+
+No shape or graphics libraries are used. Every glow, orb, and ring is
+computed directly from math functions (gaussian fields, hsv colors,
+spring physics) on numpy arrays, then piped raw into FFmpeg.
+
+Audio to visuals:
+    bass   (20-160 Hz)   -> big, deep, slow orbs that breathe with the kick
+    mids   (160-1600 Hz) -> medium orbs
+    treble (1600-8000 Hz)-> small, bright, near orbs
+    punch  (spectral flux, weighted to the lows) -> acceleration impulses
+            for the orbs, flashes for the core, and expanding rings
+
+Rendering:
+    additive gaussian glows on a black canvas, tone-mapped with
+    1 - exp(-x) so the glow stays soft and clean, plus a light vignette.
+"""
+
+import argparse
+import math
+import os
+import re
+import subprocess
+import sys
+import numpy as np
+
+try:
+    import imageio_ffmpeg
+except ImportError:
+    sys.exit("Missing dependency. Run:  python -m pip install imageio-ffmpeg numpy")
+
+
+def ffmpeg_exe():
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def has_audio(path):
+    """Return (has_audio, channel_count) parsed from ffprobe-style info."""
+    p = subprocess.run([ffmpeg_exe(), "-i", path], capture_output=True, text=True)
+    err = p.stderr or ""
+    if "Audio:" not in err:
+        return False, 1
+    m = re.search(r"Audio:.*?(\d+) ch", err)
+    if m:
+        nch = int(m.group(1))
+    elif "mono" in err:
+        nch = 1
+    else:
+        nch = 2  # stereo is the common case
+    return True, nch
+
+
+def decode_audio(path, sr=44100):
+    p = subprocess.run(
+        [ffmpeg_exe(), "-y", "-i", path,
+         "-ac", "1", "-ar", str(sr), "-f", "f32le", "-"],
+        capture_output=True)
+    if p.returncode != 0 or not p.stdout:
+        raise RuntimeError("could not decode audio from: " + path)
+    return np.frombuffer(p.stdout, np.float32).copy()
+
+
+# ------------------------- audio analysis -------------------------
+
+def analyze(samples, sr, fps):
+    """One feature value per video frame: bass, mid, treble energy,
+    and punch (spectral flux, low-frequency weighted)."""
+    hop = sr // fps
+    F = 2048
+    n = max(1, math.ceil(len(samples) / hop))
+    win = np.hanning(F).astype(np.float32)
+    hz = np.arange(F // 2 + 1) * (sr / F)
+    m_lo = (hz >= 20) & (hz <= 160)
+    m_mid = (hz > 160) & (hz <= 1600)
+    m_hi = (hz > 1600) & (hz <= 8000)
+    m_all = (hz >= 20) & (hz <= 8000)
+
+    mags = np.empty((n, F // 2 + 1), np.float32)
+    for i in range(n):
+        seg = samples[i * hop: i * hop + F]
+        if seg.size < F:
+            seg = np.pad(seg, (0, F - seg.size))
+        mags[i] = np.abs(np.fft.rfft(seg * win))
+
+    e_lo = np.empty(n, np.float32)
+    e_mid = np.empty(n, np.float32)
+    e_hi = np.empty(n, np.float32)
+    flux = np.empty(n, np.float32)
+    flux_lo = np.empty(n, np.float32)
+    prev = np.zeros(F // 2 + 1, np.float32)
+    for i in range(n):
+        m = mags[i]
+        e_lo[i] = np.dot(m[m_lo], m[m_lo])
+        e_mid[i] = np.dot(m[m_mid], m[m_mid])
+        e_hi[i] = np.dot(m[m_hi], m[m_hi])
+        d = m[m_all] - prev[m_all]
+        np.maximum(d, 0.0, out=d)
+        flux[i] = np.dot(d, d)
+        d = m[m_lo] - prev[m_lo]
+        np.maximum(d, 0.0, out=d)
+        flux_lo[i] = np.dot(d, d)
+        prev = m
+
+    def norm(x):
+        s = float(np.percentile(x, 98))
+        return np.clip(x / max(s, 1e-9), 0.0, 3.0)
+
+    return {
+        "n": n, "fps": fps,
+        "bass": norm(np.sqrt(e_lo)),
+        "mid": norm(np.sqrt(e_mid)),
+        "treb": norm(np.sqrt(e_hi)),
+        "punch": norm((flux + 4.0 * flux_lo).astype(np.float32)),
+    }
+
+
+# ------------------------- drawing helpers -------------------------
+
+def hsv(h, s, v):
+    """hsv -> (r,g,b) in 0..1. Plain math, no color library."""
+    h = h % 1.0
+    f = h * 6.0
+    i = int(f) % 6
+    f -= int(f)
+    p = v * (1.0 - s)
+    q = v * (1.0 - f * s)
+    t = v * (1.0 - (1.0 - f) * s)
+    return ((v, t, p), (q, v, p), (p, v, t),
+            (p, q, v), (t, p, v), (v, p, q))[i]
+
+
+def add_glow(buf, gx, gy, gx2, gy2, x, y, sigma,
+             amp_glow, amp_core, col_glow, col_core, W, H):
+    """Add one gaussian glow (wide, tinted) plus a tight bright core.
+    d2 is expanded as x^2+y^2 - 2cx*x - 2cy*y + c^2 to reuse the
+    precomputed grids."""
+    nx = 0.0 if x < 0 else (W - 1) if x > W - 1 else x
+    ny = 0.0 if y < 0 else (H - 1) if y > H - 1 else y
+    if (x - nx) ** 2 + (y - ny) ** 2 > (7.0 * sigma) ** 2:
+        return  # completely off screen
+    d2 = gx2 + gy2 - 2.0 * (x * gx + y * gy) + (x * x + y * y)
+    sg = sigma * 2.6
+    f = np.exp(-d2 / (2.0 * sg * sg)) * amp_glow
+    buf[:, :, 0] += f * col_glow[0]
+    buf[:, :, 1] += f * col_glow[1]
+    buf[:, :, 2] += f * col_glow[2]
+    f = np.exp(-d2 / (2.0 * sigma * sigma)) * amp_core
+    buf[:, :, 0] += f * col_core[0]
+    buf[:, :, 1] += f * col_core[1]
+    buf[:, :, 2] += f * col_core[2]
+
+
+class Orb:
+    """A glowing orb on a slow Lissajous orbit around the center.
+    Punches add acceleration; a spring pulls it back to its orbit."""
+
+    def __init__(self, rng, band, sigma, hue, amp_g, amp_c,
+                 oa, ob, wa, wb, phase, punch_k):
+        self.band = band
+        self.sigma = sigma
+        self.hue = hue
+        self.amp_g = amp_g
+        self.amp_c = amp_c
+        self.oa, self.ob = oa, ob
+        self.wa, self.wb = wa, wb
+        self.phase = phase
+        self.punch_k = punch_k
+        d = rng.random(2) - 0.5
+        self.dir = d / (np.linalg.norm(d) + 1e-9)
+        self.off = np.zeros(2, np.float32)
+        self.vel = np.zeros(2, np.float32)
+
+    def anchor(self, t, cx, cy):
+        return (cx + self.oa * math.cos(self.wa * t + self.phase),
+                cy + self.ob * math.sin(self.wb * t + self.phase * 1.7))
+
+    def step(self, punch, rng):
+        if punch > 0.35:  # re-roll the kick direction on hard punches
+            self.dir += 0.5 * (rng.random(2) - 0.5)
+            self.dir /= np.linalg.norm(self.dir) + 1e-9
+        self.vel += self.punch_k * punch * self.dir
+        self.vel -= self.off * 0.004          # spring back to orbit
+        self.vel *= 0.90                      # damping
+        self.off += self.vel
+
+
+def build_orbs(rng, W, H, s):
+    bass = [Orb(rng, "bass", (85 + 14 * i) * s, 0.76 + 0.045 * i,
+                0.24, 0.18,
+                (0.20 + 0.04 * i) * W, (0.14 + 0.03 * i) * H,
+                0.18 + 0.05 * i, 0.14 + 0.04 * i,
+                float(rng.random() * 6.28), 9.0) for i in range(3)]
+    mid = [Orb(rng, "mid", (46 + 10 * i) * s, 0.60 + 0.04 * i,
+               0.30, 0.26,
+               0.30 * W, 0.22 * H,
+               0.45 + 0.15 * i, 0.38 + 0.12 * i,
+               float(rng.random() * 6.28), 6.5) for i in range(3)]
+    treb = [Orb(rng, "treb", (16 + 5 * i) * s, 0.48 + 0.022 * i,
+                0.38, 0.85,
+                0.40 * W, 0.32 * H,
+                1.0 + 0.30 * i, 0.85 + 0.25 * i,
+                float(rng.random() * 6.28), 5.0) for i in range(4)]
+    return bass + mid + treb
+
+
+# ------------------------- render loop -------------------------
+
+def render(feats, W, H, fps, writer):
+    s = min(W, H) / 720.0
+    rng = np.random.default_rng(20240709)
+    n = feats["n"]
+
+    gx, gy = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
+    gx2, gy2 = gx * gx, gy * gy
+    cx0, cy0 = W / 2.0, H / 2.0
+
+    # precomputed ambient halo and vignette
+    d2c = (gx - cx0) ** 2 + (gy - cy0) ** 2
+    halo = np.exp(-d2c / (2.0 * (min(W, H) * 0.55) ** 2))
+    vr = np.sqrt(d2c) / (0.5 * math.hypot(W, H))
+    vig = (1.0 - 0.30 * np.clip(vr, 0.0, 1.2) ** 2)[:, :, None].astype(np.float32)
+
+    orbs = build_orbs(rng, W, H, s)
+    e_state = {"bass": 0.0, "mid": 0.0, "treb": 0.0}
+    punch_state = 0.0
+    rings = []
+    last_ring_t = -1.0
+
+    buf = np.zeros((H, W, 3), np.float32)
+    frame = np.empty((H, W, 3), np.uint8)
+    exposure = 0.85
+    done = n // 12 + 1
+
+    for i in range(n):
+        t = i / fps
+        for b in ("bass", "mid", "treb"):
+            v = float(feats[b][i])
+            st = e_state[b]
+            e_state[b] = min(st + (v - st) * (0.55 if v > st else 0.10), 1.6)
+        punch_state = max(float(feats["punch"][i]), punch_state * 0.80)
+        overall = (0.5 * e_state["bass"] + 0.3 * e_state["mid"]
+                   + 0.2 * e_state["treb"])
+
+        # slow camera drift
+        cx = cx0 + 0.015 * W * math.sin(t * 0.13)
+        cy = cy0 + 0.012 * H * math.cos(t * 0.11)
+
+        buf[...] = 0
+
+        # faint ambient halo, hue drifting over time
+        hc = hsv(0.55 + 0.02 * t, 0.85, 1.0)
+        a = 0.05 * (0.4 + 0.6 * overall)
+        buf += halo[:, :, None] * np.array(
+            [a * hc[0], a * hc[1], a * hc[2]], np.float32)[None, None, :]
+
+        # the orbs
+        for orb in orbs:
+            orb.step(punch_state, rng)
+            ax, ay = orb.anchor(t, cx, cy)
+            x, y = ax + orb.off[0], ay + orb.off[1]
+            env = e_state[orb.band]
+            hue = (orb.hue + 0.02 * t) % 1.0
+            if orb.band == "bass":          # big + deep: wide, dim, slow
+                sig = orb.sigma * (0.85 + 0.55 * env)
+                ag, ac = orb.amp_g * (0.5 + 0.7 * env), orb.amp_c * (0.4 + 0.9 * env)
+            elif orb.band == "mid":
+                sig = orb.sigma * (0.80 + 0.50 * env)
+                ag, ac = orb.amp_g * (0.5 + 0.8 * env), orb.amp_c * (0.5 + 0.9 * env)
+            else:                            # small + near: tight, bright, fast
+                sig = orb.sigma * (0.70 + 0.60 * env)
+                ag, ac = orb.amp_g * (0.35 + 1.1 * env), orb.amp_c * (0.3 + 1.3 * env)
+            add_glow(buf, gx, gy, gx2, gy2, x, y, sig, ag, ac,
+                     hsv(hue, 1.0, 1.0), hsv(hue, 0.55, 1.0), W, H)
+
+        # central core, flashes on punch
+        core_sig = (26 + 30 * overall + 20 * punch_state) * s
+        core_amp = 0.22 + 0.70 * overall + 1.0 * punch_state
+        hue_c = (0.50 + 0.025 * t) % 1.0
+        add_glow(buf, gx, gy, gx2, gy2, cx, cy, core_sig, core_amp,
+                 core_amp * 1.1, hsv(hue_c, 0.75, 1.0), hsv(hue_c, 0.35, 1.0), W, H)
+
+        # expanding rings on hard punches
+        if punch_state > 0.40 and t - last_ring_t > 0.14:
+            rings.append({"r": 40 * s, "w": 18 * s,
+                          "amp": 0.55 + 0.5 * punch_state,
+                          "sp": (7.0 + 26.0 * punch_state) * s,
+                          "hue": (0.52 + 0.02 * t) % 1.0})
+            last_ring_t = t
+        rings = [r for r in rings
+                 if r["amp"] > 0.02 and r["r"] < math.hypot(W, H)]
+        if rings:
+            d2r = gx2 + gy2 - 2.0 * (cx * gx + cy * gy) + cx * cx + cy * cy
+            d = np.sqrt(np.maximum(d2r, 0.0))
+            for r in rings:
+                r["r"] += r["sp"]
+                r["sp"] *= 0.97
+                r["amp"] *= 0.935
+                f = np.exp(-((d - r["r"]) ** 2) / (2.0 * r["w"] ** 2)) * r["amp"]
+                col = hsv(r["hue"], 0.9, 1.0)
+                buf[:, :, 0] += f * col[0]
+                buf[:, :, 1] += f * col[1]
+                buf[:, :, 2] += f * col[2]
+            rings = [r for r in rings
+                     if r["amp"] > 0.02 and r["r"] < math.hypot(W, H)]
+
+        # tone map: soft additive glow, never harsh clipping
+        img = 1.0 - np.exp(-buf * exposure)
+        img *= vig
+        np.clip(img, 0.0, 1.0, out=img)
+        frame[:] = np.clip(img * 255.0, 0.0, 255.0).astype(np.uint8)
+        writer.write(frame.tobytes())
+
+        if i % done == 0:
+            print(f"  frame {i + 1}/{n}")
+    print(f"  frame {n}/{n}")
+
+
+# ------------------------- main -------------------------
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Turn an audio file into a glowing beat-driven MP4.")
+    ap.add_argument("audio", help="input audio file (mp3, wav, m4a, ...)")
+    ap.add_argument("-o", "--out", help="output .mp4 path "
+                    "(default: <input>_viz.mp4)")
+    ap.add_argument("--size", default="1280x720", help="WxH, default 1280x720")
+    ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--adelay", type=int, default=40,
+                    help="delay the output audio by N ms so the visuals "
+                         "lead the sound (default 40, 0 = no delay)")
+    args = ap.parse_args()
+
+    W, H = (int(v) for v in args.size.lower().split("x"))
+    out = args.out or (os.path.splitext(args.audio)[0] + "_viz.mp4")
+
+    print("decoding audio...")
+    samples = decode_audio(args.audio)
+    print("analyzing beats...")
+    feats = analyze(samples, 44100, args.fps)
+    secs = feats["n"] / args.fps
+    print(f"rendering {feats['n']} frames ({secs:.1f}s) at {W}x{H}@{args.fps}...")
+
+    a_ok, nch = has_audio(args.audio)
+    cmd = [ffmpeg_exe(), "-y",
+           "-f", "rawvideo", "-vcodec", "rawvideo",
+           "-s", f"{W}x{H}", "-pix_fmt", "rgb24",
+           "-r", str(args.fps), "-i", "pipe:0"]
+    if a_ok:
+        cmd += ["-i", args.audio, "-map", "0:v:0", "-map", "1:a:0"]
+    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-pix_fmt", "yuv420p"]
+    if a_ok:
+        if args.adelay > 0:
+            cmd += ["-af", "adelay=" + "|".join([str(args.adelay)] * nch)]
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
+    cmd += ["-shortest", out]
+
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    try:
+        render(feats, W, H, args.fps, proc.stdin)
+    except BrokenPipeError:
+        proc.wait()
+        sys.exit("ffmpeg encoding failed")
+    finally:
+        proc.stdin.close()
+    rc = proc.wait()
+    if rc != 0:
+        sys.exit("ffmpeg encoding failed")
+    print("wrote " + os.path.abspath(out))
+
+
+if __name__ == "__main__":
+    main()
