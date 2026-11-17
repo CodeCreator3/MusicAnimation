@@ -26,11 +26,13 @@ Turns an audio file into an MP4 with a glowing, beat-driven animation.
 ```
 python -m venv .venv
 .venv\Scripts\pip install numpy imageio-ffmpeg
+# for GPU rendering (optional but recommended):
+.venv\Scripts\pip install torch
 ```
 
-(Already done in this project: `.venv` exists and both packages are
-installed. FFmpeg ships inside imageio-ffmpeg, so no system install
-is needed.)
+FFmpeg ships inside imageio-ffmpeg, so no system install is needed.
+The GPU path needs a torch CUDA build and an NVIDIA GPU; without
+either it falls back to the CPU render automatically.
 
 ## Usage
 
@@ -41,16 +43,31 @@ is needed.)
 Options:
 
 ```
--o OUT        output file (default: <input>_viz.mp4)
---size WxH    default 1280x720
---fps N       default 30
+-o OUT         output file (default: <input>_viz.mp4)
+--size WxH     default 1280x720
+--fps N        default 30
+--render M     gpu | cpu | auto (default auto, GPU if available)
+--encode M     nvenc | x264 | auto (default auto, NVENC if available)
 ```
+
+GPU render needs `pip install torch` (a CUDA build). NVENC needs an
+ffmpeg with h264_nvenc; the ffmpeg shipped in imageio-ffmpeg has it.
 
 ## Speed
 
-Renders at roughly real time at 720p30 on this machine (15 s of audio
-took about 2 minutes). A 3-minute song at 1080p takes a while; for a
-quick preview use `--size 1280x720`.
+With an NVIDIA GPU (this machine: RTX 4070) the render runs on CUDA
+via torch and the H.264 encode runs on NVENC. Both are automatic:
+- the 15 s test track renders in about 5 s (was 125 s on CPU)
+- the full 3:24 song renders in about 40 s (was ~13 min on CPU)
+
+Force one path or the other with `--render gpu|cpu|auto` and
+`--encode nvenc|x264|auto` (default `auto`: GPU if available).
+The GPU and CPU paths produce identical frames (tested to within
+1/255 per pixel).
+
+On a machine without a GPU (or without torch installed), the program
+falls back to the numpy CPU render and libx264: about 15x slower than
+real time at 720p30.
 
 ## Files
 

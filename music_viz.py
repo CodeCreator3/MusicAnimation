@@ -6,9 +6,15 @@ Usage:
     python music_viz.py song.mp3
     python music_viz.py song.mp3 -o song_viz.mp4 --size 1280x720 --fps 30
 
+Speed:
+    On a machine with an NVIDIA GPU and torch (CUDA build), the frame
+    render and the H.264 encode run on the GPU by default
+    (--render auto / --encode auto). Without a GPU it falls back to the
+    pure-numpy CPU render and libx264.
+
 No shape or graphics libraries are used. Every glow, orb, and ring is
 computed directly from math functions (gaussian fields, hsv colors,
-spring physics) on numpy arrays, then piped raw into FFmpeg.
+spring physics) on numpy/torch arrays, then piped raw into FFmpeg.
 
 Audio to visuals:
     bass   (20-160 Hz)   -> big, deep, slow orbs that breathe with the kick
@@ -38,6 +44,13 @@ except ImportError:
 
 def ffmpeg_exe():
     return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def ffmpeg_has_nvenc():
+    """True if the bundled ffmpeg build contains the h264_nvenc encoder."""
+    p = subprocess.run([ffmpeg_exe(), "-hide_banner", "-encoders"],
+                       capture_output=True, text=True)
+    return "h264_nvenc" in (p.stdout or "")
 
 
 def has_audio(path):
@@ -209,9 +222,9 @@ def build_orbs(rng, W, H, s):
     return bass + mid + treb
 
 
-# ------------------------- render loop -------------------------
+# ------------------------- cpu render loop -------------------------
 
-def render(feats, W, H, fps, writer):
+def render_cpu(feats, W, H, fps, writer):
     s = min(W, H) / 720.0
     rng = np.random.default_rng(20240709)
     n = feats["n"]
@@ -321,6 +334,169 @@ def render(feats, W, H, fps, writer):
     print(f"  frame {n}/{n}")
 
 
+# ------------------------- gpu render loop -------------------------
+#
+# Same math as render_cpu, but all full-frame fields are stacked into
+# one (K, H, W) tensor and computed with a batched exp + matmul on the
+# GPU. Per frame this is a handful of large GEMM-sized kernels instead
+# of ~50 python-looped numpy passes.
+
+# point fields per frame: 20 orb fields (glow+core each) + 2 core + 1 halo = 23
+_N_POINT = 23
+_PTS = _N_POINT * 7        # per field: x, y, sigma, amp, cr, cg, cb
+_RTS = 6                   # per ring:  r, w, amp, cr, cg, cb
+
+
+def render_gpu(feats, W, H, fps, writer, dev):
+    import torch
+
+    s = min(W, H) / 720.0
+    rng = np.random.default_rng(20240709)
+    n = feats["n"]
+
+    fx = torch.arange(W, dtype=torch.float32, device=dev)
+    fy = torch.arange(H, dtype=torch.float32, device=dev)
+    fx2 = fx[None, :] ** 2            # (1, W)
+    fy2 = fy[:, None] ** 2            # (H, 1)
+    base = fx2 + fy2                  # (H, W) x^2+y^2, reused by all fields
+    cx0, cy0 = W / 2.0, H / 2.0
+
+    # true squared distance from the canvas center (for the vignette)
+    d2c = (fx[None, :] - cx0) ** 2 + (fy[:, None] - cy0) ** 2
+    vr = d2c.sqrt() / (0.5 * math.hypot(W, H))
+    vig = (1.0 - 0.30 * torch.clamp(vr, 0.0, 1.2) ** 2)
+
+    orbs = build_orbs(rng, W, H, s)
+    e_state = {"bass": 0.0, "mid": 0.0, "treb": 0.0}
+    punch_state = 0.0
+    rings = []
+    last_ring_t = -1.0
+    diag = math.hypot(W, H)
+    halo_sig = min(W, H) * 0.55
+    exposure = 0.85
+    done = n // 12 + 1
+    sync = torch.cuda.synchronize if dev.type == "cuda" else (lambda: None)
+
+    for i in range(n):
+        t = i / fps
+        for b in ("bass", "mid", "treb"):
+            v = float(feats[b][i])
+            st = e_state[b]
+            e_state[b] = min(st + (v - st) * (0.55 if v > st else 0.10), 1.6)
+        punch_state = max(float(feats["punch"][i]), punch_state * 0.80)
+        overall = (0.5 * e_state["bass"] + 0.3 * e_state["mid"]
+                   + 0.2 * e_state["treb"])
+
+        # slow camera drift
+        cx = cx0 + 0.015 * W * math.sin(t * 0.13)
+        cy = cy0 + 0.012 * H * math.cos(t * 0.11)
+
+        # ---- gather point fields (one upload to the GPU) ----
+        # row layout: [x, y, sigma, amp, cr, cg, cb]
+        pts = np.empty(_PTS, np.float32)
+        off = 0
+        for orb in orbs:
+            orb.step(punch_state, rng)
+            ax, ay = orb.anchor(t, cx, cy)
+            x, y = ax + orb.off[0], ay + orb.off[1]
+            env = e_state[orb.band]
+            hue = (orb.hue + 0.02 * t) % 1.0
+            if orb.band == "bass":          # big + deep: wide, dim, slow
+                sig = orb.sigma * (0.85 + 0.55 * env)
+                ag, ac = orb.amp_g * (0.5 + 0.7 * env), orb.amp_c * (0.4 + 0.9 * env)
+            elif orb.band == "mid":
+                sig = orb.sigma * (0.80 + 0.50 * env)
+                ag, ac = orb.amp_g * (0.5 + 0.8 * env), orb.amp_c * (0.5 + 0.9 * env)
+            else:                            # small + near: tight, bright, fast
+                sig = orb.sigma * (0.70 + 0.60 * env)
+                ag, ac = orb.amp_g * (0.35 + 1.1 * env), orb.amp_c * (0.3 + 1.3 * env)
+            col_g = hsv(hue, 1.0, 1.0)
+            col_c = hsv(hue, 0.55, 1.0)
+            pts[off:off + 7] = (x, y, sig * 2.6, ag, col_g[0], col_g[1], col_g[2])
+            off += 7
+            pts[off:off + 7] = (x, y, sig, ac, col_c[0], col_c[1], col_c[2])
+            off += 7
+        # central core, flashes on punch
+        core_sig = (26 + 30 * overall + 20 * punch_state) * s
+        core_amp = 0.22 + 0.70 * overall + 1.0 * punch_state
+        hue_c = (0.50 + 0.025 * t) % 1.0
+        col_g = hsv(hue_c, 0.75, 1.0)
+        col_c = hsv(hue_c, 0.35, 1.0)
+        pts[off:off + 7] = (cx, cy, core_sig * 2.6, core_amp,
+                            col_g[0], col_g[1], col_g[2])
+        off += 7
+        pts[off:off + 7] = (cx, cy, core_sig, core_amp * 1.1,
+                            col_c[0], col_c[1], col_c[2])
+        off += 7
+        # ambient halo, hue drifting over time (full-screen gaussian
+        # centered on the canvas center, as in render_cpu)
+        hc = hsv(0.55 + 0.02 * t, 0.85, 1.0)
+        a = 0.05 * (0.4 + 0.6 * overall)
+        pts[off:off + 7] = (cx0, cy0, halo_sig, 1.0,
+                            a * hc[0], a * hc[1], a * hc[2])
+
+        # ---- rings (same order of cull / advance / cull as render_cpu) ----
+        if punch_state > 0.40 and t - last_ring_t > 0.14:
+            rings.append([40 * s, 18 * s, 0.55 + 0.5 * punch_state,
+                          (7.0 + 26.0 * punch_state) * s,
+                          (0.52 + 0.02 * t) % 1.0])
+            last_ring_t = t
+        rings = [r for r in rings if r[2] > 0.02 and r[0] < diag]
+        for r in rings:
+            r[0] += r[3]
+            r[3] *= 0.97
+            r[2] *= 0.935
+        rings = [r for r in rings if r[2] > 0.02 and r[0] < diag]
+
+        # ---- GPU: batched gaussian point fields ----
+        P = torch.from_numpy(pts).to(dev, non_blocking=True).view(_N_POINT, 7)
+        X, Y, SIG = P[:, 0], P[:, 1], P[:, 2]
+        CS = X * X + Y * Y
+        SG2 = 2.0 * SIG * SIG
+        # d2[k, h, w] = |p - (X[k], Y[k])|^2, one row per field
+        d2 = (base[None, :, :]
+              - 2.0 * (X[:, None, None] * fx[None, None, :]
+                       + Y[:, None, None] * fy[None, :, None])
+              + CS[:, None, None])
+        F = torch.exp(-d2 / SG2[:, None, None]) * P[:, 3][:, None, None]
+
+        K = _N_POINT
+        if rings:
+            data = []
+            for r in rings:
+                col = hsv(r[4], 0.9, 1.0)
+                data += [r[0], r[1], r[2], col[0], col[1], col[2]]
+            R = torch.tensor(data, dtype=torch.float32, device=dev)
+            R = R.view(len(rings), _RTS)
+            d2r = base - 2.0 * (cx * fx[None, :] + cy * fy[:, None]) \
+                + cx * cx + cy * cy
+            d = d2r.clamp_(min=0.0).sqrt()          # (H, W) distance from center
+            FR = torch.exp(-((d[None, :, :] - R[:, 0][:, None, None]) ** 2)
+                           / (2.0 * R[:, 1][:, None, None] ** 2)) \
+                * R[:, 2][:, None, None]            # (Rn, H, W)
+            F = torch.cat([F, FR], dim=0)
+            K = _N_POINT + len(rings)
+
+        # ---- combine, tone map, send to encoder ----
+        # F: (K, H, W), C: (K, 3) -> sum over fields
+        C = torch.empty(K, 3, dtype=torch.float32, device=dev)
+        C[:_N_POINT] = P[:, 4:]
+        if rings:
+            C[_N_POINT:] = R[:, 3:]
+        img3 = F.permute(1, 2, 0) @ C                # (H, W, 3)
+        out = 1.0 - torch.exp(-img3 * exposure)
+        out.mul_(vig[:, :, None])
+        out.clamp_(0.0, 1.0)
+        out.mul_(255.0)
+        frame = out.to(torch.uint8).cpu().numpy()
+        writer.write(frame.tobytes())
+
+        sync()
+        if i % done == 0:
+            print(f"  frame {i + 1}/{n}")
+    print(f"  frame {n}/{n}")
+
+
 # ------------------------- main -------------------------
 
 def main():
@@ -334,17 +510,51 @@ def main():
     ap.add_argument("--adelay", type=int, default=40,
                     help="delay the output audio by N ms so the visuals "
                          "lead the sound (default 40, 0 = no delay)")
+    ap.add_argument("--render", choices=["auto", "gpu", "cpu"],
+                    default="auto",
+                    help="render frames on the GPU (torch CUDA) or the CPU "
+                         "(numpy). auto: GPU if available (default).")
+    ap.add_argument("--encode", choices=["auto", "nvenc", "x264"],
+                    default="auto",
+                    help="encode H.264 with NVIDIA NVENC (GPU) or libx264 "
+                         "(CPU). auto: NVENC if available (default).")
     args = ap.parse_args()
 
     W, H = (int(v) for v in args.size.lower().split("x"))
     out = args.out or (os.path.splitext(args.audio)[0] + "_viz.mp4")
+
+    # ---- pick render + encode paths ----
+    use_gpu = False
+    if args.render in ("auto", "gpu"):
+        try:
+            import torch
+            if torch.cuda.is_available():
+                use_gpu = True
+            elif args.render == "gpu":
+                print("note: --render gpu requested but no CUDA device is "
+                      "available; using the CPU render.")
+        except ImportError:
+            if args.render == "gpu":
+                print("note: --render gpu requested but torch is not "
+                      "installed; using the CPU render.")
+    use_nvenc = False
+    if args.encode in ("auto", "nvenc"):
+        if ffmpeg_has_nvenc():
+            use_nvenc = True
+        elif args.encode == "nvenc":
+            print("note: --encode nvenc requested but this ffmpeg build has "
+                  "no h264_nvenc; using libx264.")
 
     print("decoding audio...")
     samples = decode_audio(args.audio)
     print("analyzing beats...")
     feats = analyze(samples, 44100, args.fps)
     secs = feats["n"] / args.fps
-    print(f"rendering {feats['n']} frames ({secs:.1f}s) at {W}x{H}@{args.fps}...")
+    mode = "GPU render + NVENC" if (use_gpu and use_nvenc) else \
+           "GPU render" if use_gpu else \
+           "NVENC" if use_nvenc else "CPU"
+    print(f"rendering {feats['n']} frames ({secs:.1f}s) at {W}x{H}@{args.fps} "
+          f"[{mode}]...")
 
     a_ok, nch = has_audio(args.audio)
     cmd = [ffmpeg_exe(), "-y",
@@ -353,8 +563,14 @@ def main():
            "-r", str(args.fps), "-i", "pipe:0"]
     if a_ok:
         cmd += ["-i", args.audio, "-map", "0:v:0", "-map", "1:a:0"]
-    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
-            "-pix_fmt", "yuv420p"]
+    if use_nvenc:
+        mbit = max(4, int(round(W * H / 1e6 * 8)))
+        cmd += ["-c:v", "h264_nvenc", "-preset", "p5",
+                "-rc", "vbr", "-cq", "19", "-b:v", f"{mbit}M",
+                "-pix_fmt", "yuv420p"]
+    else:
+        cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-pix_fmt", "yuv420p"]
     if a_ok:
         if args.adelay > 0:
             cmd += ["-af", "adelay=" + "|".join([str(args.adelay)] * nch)]
@@ -363,7 +579,12 @@ def main():
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     try:
-        render(feats, W, H, args.fps, proc.stdin)
+        if use_gpu:
+            import torch
+            render_gpu(feats, W, H, args.fps, proc.stdin,
+                       torch.device("cuda"))
+        else:
+            render_cpu(feats, W, H, args.fps, proc.stdin)
     except BrokenPipeError:
         proc.wait()
         sys.exit("ffmpeg encoding failed")
