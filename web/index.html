@@ -69,6 +69,25 @@
     flex: 1 1 0; min-width: 34px; font-size: 12px; padding: 4px 2px;
     text-align: center; border-radius: 4px;
   }
+  #phaseMenu {
+    position: fixed; z-index: 50;
+    background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px; display: grid;
+    grid-template-columns: 1fr 1fr; gap: 4px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  #phaseMenu button {
+    display: flex; align-items: center; gap: 7px;
+    background: none; border: 1px solid transparent;
+    border-radius: 5px; padding: 5px 10px; font-size: 13px;
+    cursor: pointer; color: var(--text);
+  }
+  #phaseMenu button:hover { border-color: var(--accent2); }
+  #phaseMenu button.current { border-color: var(--accent); }
+  #phaseMenu i {
+    display: inline-block; width: 11px; height: 11px;
+    border-radius: 3px; flex: none;
+  }
   .progress-outer {
     height: 10px; background: var(--panel2); border-radius: 5px;
     overflow: hidden; margin-top: 8px;
@@ -125,10 +144,11 @@
   </section>
 
   <section class="hidden" id="timelineSec">
-    <h2>3 &middot; Phases &amp; scenes &mdash; drag the | handles,
-      play the audio, tweak by ear</h2>
+    <h2>3 &middot; Phases &amp; scenes &mdash; drag the | handles to move
+      boundaries, click a band to change its phase, play the audio and
+      tweak by ear</h2>
     <canvas id="tl" height="170"></canvas>
-    <div id="phaseRow"></div>
+    <div id="phaseMenu" class="hidden"></div>
     <div class="legend">
       <span><i style="background:#7a5cff"></i>intro</span>
       <span><i style="background:#ff9800"></i>build</span>
@@ -251,7 +271,6 @@ async function analyze() {
     $("timelineSec").classList.remove("hidden");
     $("renderSec").classList.remove("hidden");
     $("resultBox").classList.add("hidden");
-    buildPhaseRow();
     drawTimeline();
     renderSceneChips();
     $("status").textContent = "";
@@ -260,26 +279,50 @@ async function analyze() {
   }
 }
 
-function buildPhaseRow() {
-  const row = $("phaseRow");
-  row.innerHTML = "";
-  S.spans.forEach((sp, i) => {
-    const sel = document.createElement("select");
-    sel.innerHTML = PHASES.map(p =>
-      `<option ${p === sp[0] ? "selected" : ""}>${p}</option>`).join("");
-    sel.style.flexGrow = Math.max(0.6, sp[2] - sp[1]);
-    sel.style.flexBasis = "0";
-    sel.onchange = async () => {
-      S.spans[i][0] = sel.value;
-      S.plan = await api("/api/replan", {
-        method: "POST",
-        body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
-      }).then(j => j.plan);
-      renderSceneChips();
+// ---------- phase menu (click a band on the timeline) ----------
+function openPhaseMenu(idx, x, y) {
+  const menu = $("phaseMenu");
+  menu.innerHTML = "";
+  const cur = S.spans[idx][0];
+  for (const p of PHASES) {
+    const b = document.createElement("button");
+    b.innerHTML = `<i style="background:${PHASE_COL[p]}"></i>${p}` +
+      (p === cur ? " <span style=\"opacity:.55\">\u2713</span>" : "");
+    if (p === cur) b.classList.add("current");
+    b.onclick = async e => {
+      e.stopPropagation();
+      S.spans[idx][0] = p;
+      closePhaseMenu();
+      drawTimeline();
+      try {
+        S.plan = await api("/api/replan", {
+          method: "POST",
+          body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
+        }).then(j => j.plan);
+        renderSceneChips();
+      } catch (err) { $("status").textContent = err.message; }
     };
-    row.appendChild(sel);
-  });
+    menu.appendChild(b);
+  }
+  menu.classList.remove("hidden");
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let mx = x - mw / 2, my = y + 10;
+  mx = Math.max(8, Math.min(mx, window.innerWidth - mw - 8));
+  if (my + mh > window.innerHeight - 8) my = y - mh - 10;
+  menu.style.left = mx + "px";
+  menu.style.top = my + "px";
 }
+
+function closePhaseMenu() {
+  $("phaseMenu").classList.add("hidden");
+}
+
+// any click outside the menu closes it
+document.addEventListener("pointerdown", e => {
+  if (e.target.closest && e.target.closest("#phaseMenu")) return;
+  if (e.target === $("tl")) return;  // canvas logic decides (may open it)
+  closePhaseMenu();
+});
 
 function renderSceneChips() {
   const box = $("sceneChips");
@@ -390,22 +433,35 @@ function drawTimeline() {
 $("tl").addEventListener("pointerdown", e => {
   const rect = e.target.getBoundingClientRect();
   const px = e.clientX - rect.left;
+  const py = e.clientY - rect.top;
   const w = rect.width;
+  closePhaseMenu();
+  // near a boundary handle? start dragging it
   let best = -1, bd = 1e9;
   for (let i = 0; i < S.spans.length - 1; i++) {
     const bx = S.spans[i][2] / S.dur * (w - 8) + 4;
     const d = Math.abs(bx - px);
     if (d < bd) { bd = d; best = i; }
   }
-  if (bd > 10) {
-    // click in the curve area: seek the audio preview
-    const t = (px - 4) / (w - 8) * S.dur;
-    const ap = $("audioPrev");
-    if (ap.duration) ap.currentTime = Math.max(0, Math.min(t, S.dur - 0.05));
+  if (bd <= 10) {
+    T1.drag = best;
+    e.target.setPointerCapture(e.pointerId);
     return;
   }
-  T1.drag = best;
-  e.target.setPointerCapture(e.pointerId);
+  const t = (px - 4) / (w - 8) * S.dur;
+  // clicked in the phase-band region? open the phase menu for that span
+  if (py >= 108) {
+    for (let i = 0; i < S.spans.length; i++) {
+      if (t >= S.spans[i][1] && t <= S.spans[i][2]) {
+        openPhaseMenu(i, e.clientX, e.clientY);
+        break;
+      }
+    }
+    return;
+  }
+  // clicked in the curve region: seek the audio preview
+  const ap = $("audioPrev");
+  if (ap.duration) ap.currentTime = Math.max(0, Math.min(t, S.dur - 0.05));
 });
 
 $("tl").addEventListener("pointermove", e => {
@@ -418,7 +474,6 @@ $("tl").addEventListener("pointermove", e => {
   t = Math.max(S.spans[i][1] + 0.5, Math.min(t, S.spans[i + 1][2] - 0.5));
   S.spans[i][2] = t;
   S.spans[i + 1][1] = t;
-  buildPhaseRow();
   drawTimeline();
 });
 
