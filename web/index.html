@@ -603,6 +603,17 @@ $("tl").addEventListener("pointerup", async e => {
 
 $("audioPrev").addEventListener("timeupdate", () => drawTimeline());
 
+// spacebar toggles the audio preview (not while typing or in controls)
+document.addEventListener("keydown", e => {
+  if (e.code !== "Space") return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA"
+            || t.tagName === "SELECT" || t.isContentEditable)) return;
+  e.preventDefault();
+  const ap = $("audioPrev");
+  if (ap.paused) ap.play(); else ap.pause();
+});
+
 // ---------- output folder picking ----------
 async function pickFolder() {
   try {
