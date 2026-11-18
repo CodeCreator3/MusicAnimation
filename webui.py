@@ -134,12 +134,25 @@ def api_analyze():
     punch = [round(float(feats["punch"][i]), 4) for i in idx]
     spans = M.segment_phases(feats, fps)
     plan = M.plan_scenes(spans, fps)
+    beats = M.extract_beats(feats)
     return jsonify({
         "name": name, "fps": fps, "n": n,
         "dur": n / fps, "energy": energy, "punch": punch,
         "spans": [[sp[0], sp[1] / fps, sp[2] / fps] for sp in spans],
         "plan": _plan_seconds(plan, fps),
+        "beats": beats,
     })
+
+
+@app.get("/api/beats")
+def api_beats():
+    """Re-derive the default beat markers for an input (for reset)."""
+    name = _safe_name(request.args.get("name", ""))
+    path = os.path.join(INPUTS, name)
+    if not os.path.exists(path):
+        return jsonify(error="input not found: " + name), 404
+    feats = M.analyze(M.decode_audio(path), 44100, 30)
+    return jsonify(beats=M.extract_beats(feats))
 
 
 def _plan_seconds(plan, fps):
@@ -248,6 +261,7 @@ def api_render():
     spans = d.get("spans") or None
     spans_frames = ([[sp[0], int(round(sp[1] * fps)), int(round(sp[2] * fps))]
                     for sp in spans] if spans else None)
+    beats = d.get("beats") or None
 
     out = os.path.join(out_dir, out_name)
     use_gpu = CUDA
@@ -264,7 +278,8 @@ def api_render():
             os.makedirs(out_dir, exist_ok=True)
             M.render_video(audio, out, W=W, H=H, fps=fps, adelay=adelay,
                            use_gpu=use_gpu, use_nvenc=use_nvenc,
-                           phase_spans=spans_frames, progress_cb=cb)
+                           phase_spans=spans_frames, progress_cb=cb,
+                           beats=beats)
             with jobs_lock:
                 jobs[job].update(state="done", out=out)
         except Exception as ex:

@@ -11,240 +11,275 @@
     --accent: #ff2d95; --accent2: #00e5ff;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column;
   }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 60px; }
-  h1 { font-size: 20px; margin: 6px 0 2px; font-weight: 600; }
-  h1 span { color: var(--accent); }
-  .sub { color: var(--dim); margin-bottom: 18px; }
-  section {
+  header {
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 10px; flex: none;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header h1 span { color: var(--accent); }
+  header .sub { color: var(--dim); font-size: 12px; }
+
+  .app { flex: 1; display: flex; min-height: 0; }
+  aside {
+    width: 268px; flex: none; border-right: 1px solid var(--line);
+    padding: 12px; overflow-y: auto;
+  }
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column;
+    overflow-y: auto; }
+  main .inner { padding: 14px 16px 40px; max-width: 1100px; }
+
+  .panel {
     background: var(--panel); border: 1px solid var(--line);
-    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+    border-radius: 9px; padding: 10px 12px; margin-bottom: 12px;
   }
-  section h2 {
-    font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
-    color: var(--dim); margin: 0 0 10px;
+  .panel h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--dim); margin: 0 0 8px;
   }
-  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .col { display: flex; flex-direction: column; gap: 8px; }
   button {
     background: var(--panel2); color: var(--text);
     border: 1px solid var(--line); border-radius: 6px;
-    padding: 7px 14px; cursor: pointer; font-size: 13px;
+    padding: 6px 12px; cursor: pointer; font-size: 13px;
   }
   button:hover { border-color: var(--accent2); }
   button.primary {
     background: linear-gradient(90deg, #ff2d95, #9027ff);
-    border: none; color: #fff; font-weight: 600; padding: 9px 20px;
+    border: none; color: #fff; font-weight: 600; padding: 8px 18px;
   }
   button:disabled { opacity: .45; cursor: default; }
   input[type=text], select {
     background: var(--panel2); color: var(--text);
     border: 1px solid var(--line); border-radius: 6px;
-    padding: 7px 10px; font-size: 13px;
+    padding: 6px 9px; font-size: 13px;
   }
   input[type=text]:focus, select:focus { outline: none; border-color: var(--accent2); }
   label.small { color: var(--dim); font-size: 12px; }
-  .file-chip {
-    background: var(--panel2); border: 1px solid var(--line);
-    padding: 5px 12px; border-radius: 16px; cursor: pointer; font-size: 13px;
-  }
-  .file-chip.active { border-color: var(--accent); color: #fff; }
   .hint { color: var(--dim); font-size: 12px; }
   .hidden { display: none; }
-  audio { width: 100%; margin-top: 10px; }
+  .file-chip {
+    background: var(--panel2); border: 1px solid var(--line);
+    padding: 4px 10px; border-radius: 14px; cursor: pointer; font-size: 12px;
+  }
+  .file-chip.active { border-color: var(--accent); color: #fff; }
+  audio, video { width: 100%; }
+  #inputAudio { margin-top: 8px; }
+
+  /* program monitor (video above the timeline) */
+  #monitor {
+    position: relative; background: #000; border: 1px solid var(--line);
+    border-radius: 9px; overflow: hidden; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 150px;
+  }
+  #monitor video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #monitor .cap {
+    position: absolute; left: 10px; bottom: 8px; font-size: 12px;
+    color: #fff; background: rgba(0,0,0,.45); padding: 2px 8px;
+    border-radius: 5px; pointer-events: none;
+  }
+  #monitor .empty { color: var(--dim); font-size: 13px; padding: 40px; text-align:center; }
+  .monitor-bar { display: flex; gap: 10px; align-items: center; margin: 8px 0 14px; }
+  #timeRead { font-variant-numeric: tabular-nums; color: var(--accent2);
+    font-size: 13px; min-width: 130px; }
+
+  /* the timeline block (canvas + integrated scene bar), info top-right */
+  #tlBlock {
+    position: relative; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 9px; padding: 10px;
+  }
+  #tlBlock .title { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
   canvas { display: block; width: 100%; }
-  #tl { height: 170px; }
-  #tl2 { height: 90px; }
-  .scenebar {
-    display: flex; align-items: stretch; margin-top: 10px;
-    border: 1px solid var(--line); border-radius: 8px;
-    overflow: hidden; position: relative; height: 40px;
-  }
-  .scenebar-seg {
-    flex: 1 1 0; min-width: 0; display: flex; align-items: center;
-    justify-content: center; border-right: 1px solid rgba(0,0,0,.35);
-    cursor: default;
-  }
-  .scenebar-seg:last-child { border-right: none; }
-  .scenebar-seg span {
-    font-size: 12px; color: #fff; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; padding: 0 6px;
-    text-shadow: 0 1px 2px rgba(0,0,0,.6);
-  }
-  .scenebar-drop {
-    position: absolute; top: 0; bottom: 0; width: 0;
-    border-left: 2px dashed #fff; pointer-events: auto;
-  }
+  #tl { height: 215px; cursor: crosshair; }
+  .tl-toolbar { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+
+  /* info bubble, top-right of the timeline block */
   .info {
+    position: absolute; top: 8px; right: 10px;
     display: inline-flex; align-items: center; justify-content: center;
-    width: 17px; height: 17px; margin-left: 8px; border-radius: 50%;
+    width: 18px; height: 18px; border-radius: 50%;
     border: 1px solid var(--line); color: var(--dim); font-size: 11px;
-    font-style: italic; font-family: Georgia, serif; cursor: help;
-    position: relative; vertical-align: middle;
+    font-style: italic; font-family: Georgia, serif; cursor: help; z-index: 5;
   }
   .info:hover { color: var(--accent2); border-color: var(--accent2); }
   .info .tip {
-    display: none; position: absolute; top: 22px; left: -6px;
-    width: 300px; background: var(--panel2); color: var(--text);
+    display: none; position: absolute; top: 22px; right: 0;
+    width: 320px; background: var(--panel2); color: var(--text);
     border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
-    font-size: 12px; font-style: normal; line-height: 1.5;
-    box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 60; white-space: normal;
-    text-align: left;
+    font-size: 12px; font-style: normal; line-height: 1.55;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 60; text-align: left;
   }
   .info:hover .tip { display: block; }
   .info .tip b { color: var(--accent2); font-weight: 600; }
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+  .legend span { font-size: 11px; color: var(--dim); }
+  .legend i { display: inline-block; width: 9px; height: 9px;
+    border-radius: 2px; margin-right: 4px; }
+  #status { font-size: 12px; color: var(--dim); margin-top: 6px; min-height: 16px; }
+
   #phaseMenu {
     position: fixed; z-index: 50;
     background: var(--panel2); border: 1px solid var(--line);
     border-radius: 8px; padding: 6px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.5);
-    display: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5); display: none;
   }
-  #phaseMenu.open {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-  }
+  #phaseMenu.open { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
   #phaseMenu button {
     display: flex; align-items: center; gap: 7px;
-    background: none; border: 1px solid transparent;
-    border-radius: 5px; padding: 5px 10px; font-size: 13px;
-    cursor: pointer; color: var(--text);
+    background: none; border: 1px solid transparent; border-radius: 5px;
+    padding: 5px 10px; font-size: 12px; cursor: pointer; color: var(--text);
   }
   #phaseMenu button:hover { border-color: var(--accent2); }
   #phaseMenu button.current { border-color: var(--accent); }
-  #phaseMenu i {
-    display: inline-block; width: 11px; height: 11px;
-    border-radius: 3px; flex: none;
-  }
-  .progress-outer {
-    height: 10px; background: var(--panel2); border-radius: 5px;
-    overflow: hidden; margin-top: 8px;
-  }
-  .progress-inner {
-    height: 100%; width: 0%;
+  #phaseMenu button i { display: inline-block; width: 11px; height: 11px;
+    border-radius: 3px; flex: none; }
+
+  .progress-outer { height: 10px; background: var(--panel2);
+    border-radius: 5px; overflow: hidden; margin-top: 8px; }
+  .progress-inner { height: 100%; width: 0%;
     background: linear-gradient(90deg, #ff2d95, #9027ff, #00e5ff);
-    transition: width .2s;
-  }
-  video { width: 100%; border-radius: 8px; background: #000; }
-  .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
-  .legend span { font-size: 12px; color: var(--dim); }
-  .legend i {
-    display: inline-block; width: 10px; height: 10px; border-radius: 2px;
-    margin-right: 4px;
-  }
-  #status { font-size: 12px; color: var(--dim); margin-top: 6px; }
+    transition: width .2s; }
 </style>
 </head>
 <body>
-<div class="wrap">
+<header>
   <h1>Music <span>Animation</span></h1>
   <div class="sub">audio in &rarr; beat-driven neon scenes out &middot;
-    <span id="gpuBadge" class="hint">checking GPU...</span>
+    <span id="gpuBadge">checking GPU...</span>
   </div>
+</header>
 
-  <section>
-    <h2>1 &middot; Input</h2>
-    <div class="row">
-      <button onclick="filePick.click()">Choose MP3...</button>
-      <input type="file" id="filePick" accept="audio/*,.mp3" class="hidden">
-      <span id="inputChips" class="row"></span>
-    </div>
-    <div id="audioBox" class="hidden">
-      <audio id="audioPrev" controls preload="metadata"></audio>
-    </div>
-  </section>
-
-  <section>
-    <h2>2 &middot; Project</h2>
-    <div class="row">
-      <label class="small">Name</label>
-      <input type="text" id="projName" size="18" placeholder="my_song_viz">
-      <button onclick="saveProject()">Save</button>
-      <select id="projList" style="min-width:130px"></select>
-      <button onclick="loadProjectSel()">Load</button>
-      <button onclick="deleteProjectSel()">&#10005; delete</button>
-    </div>
-    <div class="hint" style="margin-top:6px">A project stores the input, your
-      phase / timeline edits, and the output settings. Saved in projects/.</div>
-  </section>
-
-  <section>
-    <h2>3 &middot; Output</h2>
-    <div class="row">
-      <label class="small">Folder</label>
-      <input type="text" id="outDir" value="outputs" size="28">
-      <button onclick="pickFolder()">Browse...</button>
-      <label class="small">File name</label>
-      <input type="text" id="outName" size="28" placeholder="(default: &lt;input&gt;_viz.mp4)">
-      <label class="small">Size</label>
-      <select id="outSize">
-        <option value="1280x720">1280x720</option>
-        <option value="1920x1080">1920x1080</option>
-        <option value="2560x1440">2560x1440</option>
-      </select>
-    </div>
-  </section>
-
-  <section class="hidden" id="timelineSec">
-    <h2>4 &middot; Phases &amp; scenes
-      <span class="info">i
-        <span class="tip">
-          <b>Controls</b><br>
-          &bull; drag the <b>| handles</b> to move boundaries<br>
-          &bull; <b>click a band</b> to change its phase<br>
-          &bull; <b>double-click a band</b> to add a divider<br>
-          &bull; <b>space</b> = play / pause the audio preview<br>
-          &bull; <b>wheel</b> = zoom &middot; <b>shift+wheel / right-drag / alt+drag</b> = pan<br>
-          &bull; <b>hold + drag on the curve</b> = scrub the playhead<br>
-          &bull; hover the bar below for a segment's timing<br>
-          Tweak by ear as you play.
-        </span>
-      </span>
-    </h2>
-    <canvas id="tl" height="170"></canvas>
-    <div style="display:flex;gap:10px;align-items:center;margin-top:4px">
-      <button id="zoomReset" class="hidden" style="padding:3px 10px;font-size:12px">reset zoom</button>
-      <span id="zoomInfo" class="hint"></span>
-    </div>
-    <div id="phaseMenu" class="hidden"></div>
-    <div class="legend">
-      <span><i style="background:#7a5cff"></i>intro</span>
-      <span><i style="background:#ff9800"></i>build</span>
-      <span><i style="background:#ffc400"></i>suspense</span>
-      <span><i style="background:#ff2d95"></i>release</span>
-      <span><i style="background:#22c55e"></i>sustain</span>
-      <span><i style="background:#38bdf8"></i>break</span>
-      <span><i style="background:#64748b"></i>outro</span>
-      <span class="hint" style="margin-left:6px">_v2 = the second, different set of animations</span>
-    </div>
-    <div id="sceneBar"></div>
-    <div id="status"></div>
-  </section>
-
-  <section class="hidden" id="renderSec">
-    <h2>5 &middot; Render</h2>
-    <div class="row">
-      <button class="primary" id="renderBtn" onclick="startRender()">
-        Generate video
-      </button>
-      <span id="renderStatus" class="hint"></span>
-    </div>
-    <div class="progress-outer hidden" id="progOuter">
-      <div class="progress-inner" id="progInner"></div>
+<div class="app">
+  <aside>
+    <div class="panel">
+      <h2>Input</h2>
+      <div class="row">
+        <button onclick="filePick.click()">Choose MP3...</button>
+        <input type="file" id="filePick" accept="audio/*,.mp3" class="hidden">
+      </div>
+      <div id="inputChips" class="row" style="margin-top:8px"></div>
+      <audio id="inputAudio" controls preload="metadata" class="hidden"></audio>
     </div>
 
-    <div id="resultBox" class="hidden">
-      <video id="resultVid" controls preload="metadata"></video>
-      <canvas id="tl2" height="90" style="margin-top:10px"></canvas>
-      <div class="row" style="margin-top:8px">
-        <a id="dlLink" style="color:var(--accent2)">Download video</a>
-        <span class="hint" id="resultInfo"></span>
+    <div class="panel">
+      <h2>Project</h2>
+      <div class="col">
+        <div class="row">
+          <label class="small">Name</label>
+          <input type="text" id="projName" size="14" placeholder="my_song">
+        </div>
+        <div class="row">
+          <button onclick="saveProject()">Save</button>
+          <select id="projList" style="flex:1;min-width:0"></select>
+        </div>
+        <div class="row">
+          <button onclick="loadProjectSel()">Load</button>
+          <button onclick="deleteProjectSel()">&#10005; delete</button>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:6px">Stores the input, your phase /
+        beat / timeline edits, and output settings.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Output</h2>
+      <div class="col">
+        <div class="row">
+          <label class="small">Folder</label>
+          <input type="text" id="outDir" value="outputs" size="10">
+          <button onclick="pickFolder()">..</button>
+        </div>
+        <div class="row">
+          <label class="small">Name</label>
+          <input type="text" id="outName" size="14" placeholder="(auto)">
+        </div>
+        <div class="row">
+          <label class="small">Size</label>
+          <select id="outSize" style="flex:1">
+            <option value="1280x720">1280x720</option>
+            <option value="1920x1080">1920x1080</option>
+            <option value="2560x1440">2560x1440</option>
+          </select>
+        </div>
       </div>
     </div>
-  </section>
+  </aside>
+
+  <main>
+    <div class="inner">
+      <div id="monitor">
+        <div class="empty" id="monEmpty">Render a video to preview it here,
+          or play the input audio from the Input panel.</div>
+        <video id="monVid" class="hidden" preload="metadata"></video>
+        <div class="cap hidden" id="monCap"></div>
+      </div>
+      <div class="monitor-bar">
+        <button id="playBtn" onclick="togglePlay()">&#9654; Play</button>
+        <span id="timeRead">0:00.0 / 0:00.0</span>
+        <span class="hint">playback stays synced to the timeline below</span>
+      </div>
+
+      <div id="tlBlock" class="hidden">
+        <div class="title">Timeline &mdash; curve + beats (top), phases (middle),
+          scenes (bottom)</div>
+        <span class="info">i
+          <span class="tip">
+            <b>Controls</b><br>
+            &bull; drag the <b>| handles</b> to move phase boundaries<br>
+            &bull; <b>click a phase band</b> to change its phase<br>
+            &bull; <b>double-click a phase band</b> to add a divider<br>
+            &bull; <b>drag a beat circle</b> to move it / change its strength<br>
+            &bull; <b>space</b> = play / pause &middot; <b>hold + drag the curve</b> = scrub<br>
+            &bull; <b>wheel</b> = zoom &middot; <b>shift+wheel / right-drag / alt+drag</b> = pan<br>
+            &bull; zoom in close to reveal draggable beat markers<br>
+            The scene bar at the bottom is part of the timeline and zooms/pans with it.
+          </span>
+        </span>
+        <canvas id="tl"></canvas>
+        <div class="tl-toolbar">
+          <button id="zoomReset" class="hidden" style="padding:3px 10px;font-size:12px">reset zoom</button>
+          <span id="zoomInfo" class="hint"></span>
+          <button onclick="resetBeats()" style="padding:3px 10px;font-size:12px">reset beats</button>
+          <span id="beatInfo" class="hint"></span>
+        </div>
+        <div class="legend">
+          <span><i style="background:#7a5cff"></i>intro</span>
+          <span><i style="background:#ff9800"></i>build</span>
+          <span><i style="background:#ffc400"></i>suspense</span>
+          <span><i style="background:#ff2d95"></i>release</span>
+          <span><i style="background:#22c55e"></i>sustain</span>
+          <span><i style="background:#38bdf8"></i>break</span>
+          <span><i style="background:#64748b"></i>outro</span>
+          <span style="opacity:.7">&bull; _v2 = different animation set</span>
+        </div>
+        <div id="phaseMenu" class="hidden"></div>
+        <div id="status"></div>
+      </div>
+
+      <div class="panel hidden" id="renderPanel" style="margin-top:14px">
+        <h2>Render</h2>
+        <div class="row">
+          <button class="primary" id="renderBtn" onclick="startRender()">
+            Generate video</button>
+          <span id="renderStatus" class="hint"></span>
+        </div>
+        <div class="progress-outer hidden" id="progOuter">
+          <div class="progress-inner" id="progInner"></div>
+        </div>
+        <div class="row" style="margin-top:10px" id="resultRow">
+          <a id="dlLink" style="color:var(--accent2)" class="hidden">Download video</a>
+          <span class="hint" id="resultInfo"></span>
+        </div>
+      </div>
+    </div>
+  </main>
 </div>
 
 <script>
@@ -262,10 +297,17 @@ const SCENE_COL = {
   snake:"#19d3a5", charge:"#ff3d3d", bombs:"#ff8a3d",
   fractal:"#d65cff", vortex:"#7c4dff"
 };
+// timeline canvas layout (CSS px)
+const TL = { curveTop: 8, curveH: 92,             // energy + beats: 8..100
+             bandY: 108, bandH: 34,               // phases: 108..142
+             sceneY: 150, sceneH: 46,              // scenes: 150..196
+             H: 215 };
+const BEAT_SPAN = 45;  // show draggable beat circles when view < this many seconds
+
 const S = {
   inputs: [], name: null, fps: 30, dur: 0, n: 0,
-  energy: [], punch: [], spans: [], plan: [],
-  job: null, result: null
+  energy: [], punch: [], spans: [], plan: [], beats: [],
+  time: 0, job: null, result: null, active: "audio"
 };
 
 const $ = id => document.getElementById(id);
@@ -277,16 +319,20 @@ async function api(url, opts) {
   return j;
 }
 
+function phaseCol(p) { return PHASE_COL[p] || "#888888"; }
+function fmtT(t) {
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
+}
+
 // ---------- boot ----------
 (async function boot() {
   const info = await api("/api/info");
   S.inputs = info.inputs;
   $("gpuBadge").textContent =
-    (info.cuda ? "GPU render ready" : "CPU render") +
-    (info.nvenc ? " + NVENC" : "");
+    (info.cuda ? "GPU render ready" : "CPU render") + (info.nvenc ? " + NVENC" : "");
   renderInputChips();
   refreshProjectList();
-  // select first input if there is one
   if (S.inputs.length) selectInput(S.inputs[0]);
 })();
 
@@ -319,13 +365,12 @@ $("filePick").onchange = async e => {
 function selectInput(name) {
   S.name = name;
   renderInputChips();
-  $("audioBox").classList.remove("hidden");
-  const a = $("audioPrev");
-  a.src = "/media?name=" + encodeURIComponent(name);
+  $("inputAudio").classList.remove("hidden");
+  $("inputAudio").src = "/media?name=" + encodeURIComponent(name);
   return analyze();
 }
 
-// ---------- analyze + editable timeline ----------
+// ---------- analyze ----------
 async function analyze() {
   if (!S.name) return;
   $("status").textContent = "analyzing " + S.name + " ...";
@@ -334,42 +379,159 @@ async function analyze() {
     Object.assign(S, {
       fps: j.fps, n: j.n, dur: j.dur,
       energy: j.energy, punch: j.punch,
-      spans: j.spans, plan: j.plan
+      spans: j.spans, plan: j.plan, beats: j.beats
     });
-    $("timelineSec").classList.remove("hidden");
-    $("renderSec").classList.remove("hidden");
-    $("resultBox").classList.add("hidden");
+    S.time = 0; S.active = "audio";
     viewSet(0, j.dur);
+    $("tlBlock").classList.remove("hidden");
+    $("renderPanel").classList.remove("hidden");
     drawTimeline();
-    renderSceneChips();
+    updateMonitor();
     $("status").textContent = "";
-  } catch (err) {
-    $("status").textContent = "analysis failed: " + err.message;
+  } catch (err) { $("status").textContent = "analysis failed: " + err.message; }
+}
+
+// ---------- playback (synced to timeline) ----------
+function activeEl() { return S.active === "video" ? $("monVid") : $("inputAudio"); }
+
+function updateMonitor() {
+  const vid = $("monVid"), empty = $("monEmpty"), cap = $("monCap");
+  if (S.result) {
+    vid.classList.remove("hidden"); empty.classList.add("hidden");
+    cap.classList.remove("hidden");
+    cap.textContent = "result: " + S.result.split(/[\\/]/).pop();
+    $("renderPanel").classList.remove("hidden");
+    $("resultRow").classList.remove("hidden");
+    $("dlLink").classList.remove("hidden");
+  } else {
+    vid.classList.add("hidden"); vid.removeAttribute("src");
+    empty.classList.remove("hidden"); cap.classList.add("hidden");
+    $("dlLink").classList.add("hidden");
   }
 }
 
-// split a section into two at time t (adds a divider). The right half
-// starts with the same phase, so it can be re-labelled in the menu.
-function splitSpan(idx, t) {
-  const sp = S.spans[idx];
-  const MINLEN = 0.4;
-  if (t - sp[1] < MINLEN || sp[2] - t < MINLEN) return;
-  S.spans.splice(idx + 1, 0, [sp[0], t, sp[2]]);
-  sp[2] = t;
+function setPlayTime(t) {
+  S.time = t;
+  const el = activeEl();
+  if (el && el.duration) el.currentTime = Math.max(0, Math.min(t, S.dur - 0.02));
+  updatePlayheadUI();
   drawTimeline();
-  replan();
+}
+function updatePlayheadUI() {
+  const el = activeEl();
+  const playing = el && !el.paused;
+  $("playBtn").innerHTML = (playing ? "&#10074;&#10074; Pause" : "&#9654; Play");
+  $("timeRead").textContent = fmtT(S.time) + " / " + fmtT(S.dur);
+}
+function togglePlay() {
+  const el = activeEl();
+  if (!el || !el.duration) return;
+  if (el.paused) { el.play(); } else { el.pause(); }
+  updatePlayheadUI();
+}
+document.addEventListener("keydown", e => {
+  if (e.code !== "Space") return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA"
+            || t.tagName === "SELECT" || t.isContentEditable)) return;
+  e.preventDefault();
+  togglePlay();
+});
+$("inputAudio").addEventListener("timeupdate", () => {
+  if (S.active !== "audio") return;
+  S.time = $("inputAudio").currentTime;
+  updatePlayheadUI(); drawTimeline();
+});
+$("monVid").addEventListener("timeupdate", () => {
+  if (S.active !== "video") return;
+  S.time = $("monVid").currentTime;
+  updatePlayheadUI(); drawTimeline();
+});
+$("monVid").addEventListener("ended", updatePlayheadUI);
+$("inputAudio").addEventListener("ended", updatePlayheadUI);
+
+// ---------- projects ----------
+function projName() {
+  const v = $("projName").value.trim();
+  return v || (S.name ? S.name.split(".")[0] : "");
+}
+async function refreshProjectList(selectName) {
+  let names = [];
+  try { names = (await api("/api/projects")).names; } catch (e) {}
+  const sel = $("projList");
+  const prev = selectName || sel.value;
+  sel.innerHTML = names.length
+    ? names.map(n => `<option ${n === prev ? "selected" : ""}>${n}</option>`).join("")
+    : `<option value="">(none)</option>`;
+  if (selectName && names.includes(selectName)) sel.value = selectName;
+}
+function projectData() {
+  return { name: S.name, fps: S.fps, n: S.n, spans: S.spans, beats: S.beats,
+           out_dir: $("outDir").value.trim() || "outputs",
+           out_name: $("outName").value.trim(), size: $("outSize").value };
+}
+async function saveProject() {
+  const name = projName();
+  if (!name) return alert("Give the project a name (or pick an input first).");
+  if (!S.name) return alert("Pick an input first, then save.");
+  $("projName").value = name;
+  try {
+    await api("/api/project/save", {
+      method: "POST", body: JSON.stringify({name, data: projectData()})});
+    await refreshProjectList(name);
+    $("status").textContent = "saved project " + name;
+  } catch (e) { alert("save failed: " + e.message); }
+}
+async function loadProjectSel() {
+  const name = $("projList").value;
+  if (!name) return alert("No project selected.");
+  $("projName").value = name;
+  try {
+    const d = await api("/api/project/load?name=" + encodeURIComponent(name));
+    $("outDir").value = d.out_dir || "outputs";
+    $("outName").value = d.out_name || "";
+    if (d.size) $("outSize").value = d.size;
+    if (d.name && S.inputs.includes(d.name)) await selectInput(d.name);
+    else { $("status").textContent = "input " + (d.name || "?") + " not in inputs/"; return; }
+    if (d.spans && d.spans.length) { S.spans = d.spans; await replan(); }
+    if (d.beats) { S.beats = d.beats; drawTimeline(); }
+    $("status").textContent = "loaded project " + name;
+  } catch (e) { alert("load failed: " + e.message); }
+}
+async function deleteProjectSel() {
+  const name = $("projList").value;
+  if (!name) return alert("No project selected.");
+  if (!confirm("Delete project " + name + "?")) return;
+  try {
+    await api("/api/project/delete", {method: "POST", body: JSON.stringify({name})});
+    await refreshProjectList();
+  } catch (e) { alert("delete failed: " + e.message); }
+}
+function pickFolder() {
+  (async () => {
+    try {
+      if (window.showDirectoryPicker) {
+        const dir = await window.showDirectoryPicker();
+        const j = await api("/api/resolve_dir?name=" + encodeURIComponent(dir.name));
+        $("outDir").value = j.path; return;
+      }
+      throw new Error("no picker");
+    } catch (err) {
+      const p = prompt("Type the absolute path of the output folder:", $("outDir").value);
+      if (p) $("outDir").value = p;
+    }
+  })();
 }
 
-// re-plan scenes from the current spans (shared by menu, split, drag)
+// ---------- replan + phase menu ----------
 function replan() {
   return api("/api/replan", {
     method: "POST",
     body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
-  }).then(j => { S.plan = j.plan; renderSceneChips(); })
+  }).then(j => { S.plan = j.plan; drawTimeline(); })
    .catch(err => { $("status").textContent = err.message; });
 }
 
-// ---------- phase menu (click a band on the timeline) ----------
 function openPhaseMenu(idx, x, y) {
   const menu = $("phaseMenu");
   menu.innerHTML = "";
@@ -379,7 +541,7 @@ function openPhaseMenu(idx, x, y) {
   for (const p of opts) {
     const b = document.createElement("button");
     b.innerHTML = `<i style="background:${phaseCol(p)}"></i>${p}` +
-      (p === cur ? " <span style=\"opacity:.55\">\u2713</span>" : "");
+      (p === cur ? ' <span style="opacity:.55">\u2713</span>' : "");
     if (p === cur) b.classList.add("current");
     b.onclick = async e => {
       e.stopPropagation();
@@ -390,7 +552,6 @@ function openPhaseMenu(idx, x, y) {
     };
     menu.appendChild(b);
   }
-  // delete the divider at the start of this section (merge into prev)
   if (idx > 0) {
     const del = document.createElement("button");
     del.style.gridColumn = "1 / -1";
@@ -414,126 +575,293 @@ function openPhaseMenu(idx, x, y) {
   menu.style.left = mx + "px";
   menu.style.top = my + "px";
 }
-
-function closePhaseMenu() {
-  $("phaseMenu").classList.remove("open");
-}
-
-// any click outside the menu closes it
+function closePhaseMenu() { $("phaseMenu").classList.remove("open"); }
 document.addEventListener("pointerdown", e => {
   if (e.target.closest && e.target.closest("#phaseMenu")) return;
-  if (e.target === $("tl")) return;  // canvas logic decides (may open it)
+  if (e.target === $("tl")) return;
   closePhaseMenu();
 });
 
-function renderSceneBar() {
-  const box = $("sceneBar");
-  box.innerHTML = "";
-  if (!S.plan.length) return;
-  const bar = document.createElement("div");
-  bar.className = "scenebar";
-  for (const sp of S.plan) {
-    const seg = document.createElement("div");
-    seg.className = "scenebar-seg";
-    seg.style.flex = Math.max(0.5, sp.s1 - sp.s0);
-    seg.style.background = (SCENE_COL[sp.scene] || "#666") + "2e";
-    seg.style.borderColor = SCENE_COL[sp.scene] || "#666";
-    const label = document.createElement("span");
-    label.textContent = sp.scene;
-    seg.appendChild(label);
-    seg.title = sp.s0.toFixed(1) + "-" + sp.s1.toFixed(1) + "s  " +
-      sp.phase + " \u2192 " + sp.scene;
-    bar.appendChild(seg);
-  }
-  // drop markers (the explosion moment of each burst/charge)
-  for (const sp of S.plan) {
-    if (sp.drop !== null && sp.drop !== undefined && S.dur > 0) {
-      const m = document.createElement("div");
-      m.className = "scenebar-drop";
-      m.style.left = (sp.drop / S.dur * 100) + "%";
-      m.title = "drop at " + sp.drop.toFixed(1) + "s";
-      bar.appendChild(m);
-    }
-  }
-  box.appendChild(bar);
+// split a section into two at time t (adds a divider)
+function splitSpan(idx, t) {
+  const sp = S.spans[idx];
+  const MINLEN = 0.4;
+  if (t - sp[1] < MINLEN || sp[2] - t < MINLEN) return;
+  S.spans.splice(idx + 1, 0, [sp[0], t, sp[2]]);
+  sp[2] = t;
+  drawTimeline();
+  replan();
 }
 
-function renderSceneChips() {
-  // kept as an alias so old call-sites keep working
-  renderSceneBar();
-}
-
-function fmtT(t) {
-  const m = Math.floor(t / 60), s = t - m * 60;
-  return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
-}
-
-// phase color that is always a valid 6-digit hex (unknown -> neutral)
-function phaseCol(p) {
-  return PHASE_COL[p] || "#888888";
+// ---------- beats ----------
+function beatY(inten) { return (TL.curveTop + TL.curveH) - 6 - inten * (TL.curveH - 12); }
+function intenY(py) { return Math.max(0, Math.min(1,
+  ((TL.curveTop + TL.curveH) - 6 - py) / (TL.curveH - 12))); }
+function beatsShown() { return (T1.v1 - T1.v0) < BEAT_SPAN; }
+function resetBeats() {
+  if (!S.name) return;
+  api("/api/beats?name=" + encodeURIComponent(S.name))
+    .then(j => { S.beats = j.beats; drawTimeline(); })
+    .catch(e => $("status").textContent = e.message);
 }
 
 // ---------- timeline canvas ----------
 function canvasCtx(cv) {
   const dpr = window.devicePixelRatio || 1;
-  const w = cv.clientWidth;        // CSS px, stable
-  const h = cv.clientHeight;       // CSS px, stable (from #tl / #tl2 rules)
-  const pw = Math.max(1, Math.round(w * dpr));
-  const ph = Math.max(1, Math.round(h * dpr));
-  if (cv.width !== pw || cv.height !== ph) {
-    cv.width = pw;
-    cv.height = ph;
-  }
+  const w = cv.clientWidth, h = cv.clientHeight;
+  const pw = Math.max(1, Math.round(w * dpr)), ph = Math.max(1, Math.round(h * dpr));
+  if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
   const ctx = cv.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return {ctx, w: w, h: h};
+  return {ctx, w, h};
 }
 
-const T1 = {drag: -1, pan: null, scrub: false, menuTimer: null,
-            lastClickT: 0, lastClickX: 0, v0: 0, v1: 1};
+const T1 = {drag: -1, pan: null, scrub: false, beat: -1,
+            menuTimer: null, lastClickT: 0, lastClickX: 0, v0: 0, v1: 1};
 
 function viewSet(v0, v1) {
   const MIN = 1.5;
-  if (v1 - v0 < MIN) { const c = (v0 + v1) / 2; v0 = c - MIN / 2; v1 = c + MIN / 2; }
+  if (v1 - v0 < MIN) { const c = (v0 + v1) / 2; v0 = c - MIN/2; v1 = c + MIN/2; }
   if (v0 < 0) { v1 -= v0; v0 = 0; }
   if (v1 > S.dur) { v0 -= v1 - S.dur; v1 = S.dur; }
   if (v0 < 0) v0 = 0;
   T1.v0 = v0; T1.v1 = v1;
   updateZoomUI();
 }
-
 function updateZoomUI() {
   const zoomed = T1.v1 - T1.v0 < S.dur - 0.01;
   $("zoomReset").classList.toggle("hidden", !zoomed);
-  $("zoomInfo").textContent = zoomed
-    ? "viewing " + fmtT(T1.v0) + " - " + fmtT(T1.v1)
-    : "";
+  $("zoomInfo").textContent = zoomed ? "viewing " + fmtT(T1.v0) + " - " + fmtT(T1.v1) : "";
+  $("beatInfo").textContent = beatsShown() ? "beat markers: drag to move / change strength"
+                                            : ("zoom in < " + BEAT_SPAN + "s to edit beats");
+}
+function viewX(w, t) { return (t - T1.v0) / (T1.v1 - T1.v0) * (w - 8) + 4; }
+function viewT(w, px) { return T1.v0 + (px - 4) / (w - 8) * (T1.v1 - T1.v0); }
+$("zoomReset").onclick = () => { viewSet(0, S.dur); drawTimeline(); };
+
+function drawTimeline() {
+  if (!S.dur) return;
+  const {ctx, w, h} = canvasCtx($("tl"));
+  ctx.clearRect(0, 0, w, h);
+  const X = t => viewX(w, t);
+
+  // energy area
+  const emax = Math.max(...S.energy, 0.001);
+  ctx.beginPath(); let started = false;
+  S.energy.forEach((v, i) => {
+    const t = i / (S.energy.length - 1) * S.dur;
+    if (t < T1.v0 - 0.1 || t > T1.v1 + 0.1) return;
+    const x = X(t), y = TL.curveTop + TL.curveH - v / emax * TL.curveH;
+    if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+  });
+  if (started) {
+    ctx.lineTo(X(Math.min(S.dur, T1.v1)), TL.curveTop + TL.curveH);
+    ctx.lineTo(X(Math.max(0, T1.v0)), TL.curveTop + TL.curveH);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, TL.curveTop, 0, TL.curveTop + TL.curveH);
+    g.addColorStop(0, "rgba(255,45,149,.55)");
+    g.addColorStop(1, "rgba(255,45,149,.06)");
+    ctx.fillStyle = g; ctx.fill();
+  }
+
+  // punch ticks (blue) + draggable beat circles
+  const pmax = Math.max(...S.punch, 0.001);
+  ctx.strokeStyle = "rgba(0,229,255,.7)"; ctx.lineWidth = 1.5; ctx.beginPath();
+  S.punch.forEach((v, i) => {
+    const t = i / (S.punch.length - 1) * S.dur;
+    if (t < T1.v0 || t > T1.v1) return;
+    if (v > 0.15 * pmax) {
+      const y0 = TL.curveTop + TL.curveH;
+      ctx.moveTo(X(t), y0);
+      ctx.lineTo(X(t), y0 - v / pmax * 30);
+    }
+  });
+  ctx.stroke();
+  if (beatsShown()) {
+    for (const b of S.beats) {
+      const x = X(b[0]);
+      if (x < -10 || x > w + 10) continue;
+      const y = beatY(b[1]);
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, 6.283);
+      ctx.fillStyle = "#00e5ff"; ctx.fill();
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
+      // strength stem
+      ctx.strokeStyle = "rgba(0,229,255,.4)"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, TL.curveTop + TL.curveH); ctx.stroke();
+    }
+  }
+
+  // phase bands
+  for (const sp of S.spans) {
+    const a = Math.max(X(sp[1]), 0), b = Math.min(X(sp[2]), w);
+    if (b <= 0 || a >= w) continue;
+    ctx.fillStyle = phaseCol(sp[0]) + "55";
+    ctx.fillRect(a, TL.bandY, b - a, TL.bandH);
+    ctx.strokeStyle = phaseCol(sp[0]);
+    ctx.strokeRect(a + .5, TL.bandY + .5, b - a - 1, TL.bandH - 1);
+    ctx.fillStyle = "#fff"; ctx.font = "11px Segoe UI";
+    const tw = ctx.measureText(sp[0]).width;
+    if (b - a > tw + 10) ctx.fillText(sp[0], (a + b) / 2 - tw / 2, TL.bandY + 21);
+  }
+
+  // scene bar (part of the timeline, zooms/pans with it)
+  for (const sp of S.plan) {
+    const a = Math.max(X(sp.s0), 0), b = Math.min(X(sp.s1), w);
+    if (b <= 0 || a >= w) continue;
+    ctx.fillStyle = (SCENE_COL[sp.scene] || "#666") + "33";
+    ctx.fillRect(a, TL.sceneY, b - a, TL.sceneH);
+    ctx.strokeStyle = SCENE_COL[sp.scene] || "#666"; ctx.lineWidth = 1.5;
+    ctx.strokeRect(a + .5, TL.sceneY + .5, b - a - 1, TL.sceneH - 1);
+    ctx.lineWidth = 1;
+    if (sp.drop !== null && sp.drop !== undefined) {
+      const dx = X(sp.drop);
+      if (dx >= a && dx <= b) {
+        ctx.strokeStyle = "#fff"; ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.moveTo(dx, TL.sceneY); ctx.lineTo(dx, TL.sceneY + TL.sceneH);
+        ctx.stroke(); ctx.setLineDash([]);
+      }
+    }
+    ctx.fillStyle = "#fff"; ctx.font = "11px Segoe UI";
+    const label = sp.scene;
+    if (b - a > ctx.measureText(label).width + 10)
+      ctx.fillText(label, (a + b) / 2 - ctx.measureText(label).width / 2, TL.sceneY + 28);
+  }
+
+  // playhead (synced to playback)
+  if (S.time >= T1.v0 && S.time <= T1.v1) {
+    const px = X(S.time);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+  }
+  // boundary handles
+  for (let i = 0; i < S.spans.length - 1; i++) {
+    const px = X(S.spans[i][2]);
+    if (px < -10 || px > w + 10) continue;
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.moveTo(px - 6, 4); ctx.lineTo(px + 6, 4); ctx.lineTo(px, 14);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,.5)";
+    ctx.beginPath(); ctx.moveTo(px, 4); ctx.lineTo(px, h); ctx.stroke();
+  }
 }
 
-function viewX(w, t) {
-  return (t - T1.v0) / (T1.v1 - T1.v0) * (w - 8) + 4;
-}
+// pointer interaction
+$("tl").addEventListener("pointerdown", e => {
+  const rect = e.target.getBoundingClientRect();
+  const px = e.clientX - rect.left, py = e.clientY - rect.top, w = rect.width;
+  closePhaseMenu();
+  if (T1.menuTimer) { clearTimeout(T1.menuTimer); T1.menuTimer = null; }
+  if (e.button === 2 || e.altKey) {
+    T1.pan = {px, v0: T1.v0, v1: T1.v1};
+    e.target.setPointerCapture(e.pointerId);
+    return;
+  }
+  // near a beat circle?
+  if (beatsShown()) {
+    for (let i = 0; i < S.beats.length; i++) {
+      const bx = viewX(w, S.beats[i][0]), by = beatY(S.beats[i][1]);
+      if (Math.hypot(px - bx, py - by) < 10) {
+        T1.beat = i;
+        e.target.setPointerCapture(e.pointerId);
+        return;
+      }
+    }
+  }
+  // near a boundary handle?
+  let best = -1, bd = 1e9;
+  for (let i = 0; i < S.spans.length - 1; i++) {
+    const bx = viewX(w, S.spans[i][2]);
+    const d = Math.abs(bx - px);
+    if (d < bd) { bd = d; best = i; }
+  }
+  if (bd <= 10 && py >= TL.bandY - 6 && py <= TL.bandY + TL.bandH + 6) {
+    T1.drag = best;
+    e.target.setPointerCapture(e.pointerId);
+    return;
+  }
+  const t = viewT(w, px);
+  // phase band region?
+  if (py >= TL.bandY - 4 && py <= TL.bandY + TL.bandH + 4) {
+    let idx = -1;
+    for (let i = 0; i < S.spans.length; i++)
+      if (t >= S.spans[i][1] && t <= S.spans[i][2]) { idx = i; break; }
+    if (idx >= 0) {
+      const now = performance.now();
+      const isDouble = (now - T1.lastClickT < 380) && Math.abs(px - T1.lastClickX) < 24;
+      if (isDouble) { T1.lastClickT = 0; splitSpan(idx, t); }
+      else {
+        T1.lastClickT = now; T1.lastClickX = px;
+        T1.menuTimer = setTimeout(() => { T1.menuTimer = null;
+          openPhaseMenu(idx, e.clientX, e.clientY); }, 300);
+      }
+    }
+    return;
+  }
+  // curve / scene region: scrub (hold to move playhead)
+  S.active = S.result ? "video" : "audio";
+  setPlayTime(t);
+  T1.scrub = true;
+  e.target.setPointerCapture(e.pointerId);
+});
 
-function viewT(w, px) {
-  return T1.v0 + (px - 4) / (w - 8) * (T1.v1 - T1.v0);
-}
+$("tl").addEventListener("contextmenu", e => e.preventDefault());
 
-$("zoomReset").onclick = () => {
-  viewSet(0, S.dur);
+$("tl").addEventListener("pointermove", e => {
+  if (T1.pan) {
+    const rect = e.target.getBoundingClientRect();
+    const px = e.clientX - rect.left, w = rect.width;
+    const dt = (T1.pan.px - px) / w * (T1.pan.v1 - T1.pan.v0);
+    viewSet(T1.pan.v0 + dt, T1.pan.v1 + dt);
+    drawTimeline();
+    return;
+  }
+  if (T1.beat >= 0) {
+    const rect = e.target.getBoundingClientRect();
+    const w = rect.width;
+    const t = Math.max(0.05, Math.min(S.dur - 0.05, viewT(w, e.clientX - rect.left)));
+    const inten = intenY(e.clientY - rect.top);
+    S.beats[T1.beat] = [t, inten];
+    drawTimeline();
+    return;
+  }
+  if (T1.scrub && (e.buttons & 1)) {
+    const rect = e.target.getBoundingClientRect();
+    setPlayTime(viewT(rect.width, e.clientX - rect.left));
+    return;
+  }
+  if (T1.drag < 0) return;
+  const rect = e.target.getBoundingClientRect();
+  const w = rect.width;
+  let t = viewT(w, e.clientX - rect.left);
+  const i = T1.drag;
+  t = Math.max(S.spans[i][1] + 0.5, Math.min(t, S.spans[i + 1][2] - 0.5));
+  S.spans[i][2] = t;
+  S.spans[i + 1][1] = t;
   drawTimeline();
-};
+});
+
+$("tl").addEventListener("pointercancel", () => {
+  T1.pan = null; T1.scrub = false; T1.drag = -1; T1.beat = -1;
+});
+$("tl").addEventListener("pointerup", async e => {
+  if (T1.pan) { T1.pan = null; return; }
+  if (T1.beat >= 0) { T1.beat = -1; return; }
+  if (T1.scrub) { T1.scrub = false; return; }
+  if (T1.drag < 0) return;
+  T1.drag = -1;
+  try { await replan(); } catch (err) { $("status").textContent = err.message; }
+});
 
 $("tl").addEventListener("wheel", e => {
   e.preventDefault();
   const rect = e.target.getBoundingClientRect();
-  const px = e.clientX - rect.left;
-  const w = rect.width;
+  const px = e.clientX - rect.left, w = rect.width;
   if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-    // horizontal scroll: pan
     const d = (e.deltaX || e.deltaY) / w * (T1.v1 - T1.v0);
     viewSet(T1.v0 + d, T1.v1 + d);
   } else {
-    // zoom around the cursor
     const f = e.deltaY > 0 ? 1.18 : 1 / 1.18;
     const anchor = viewT(w, px);
     const span = (T1.v1 - T1.v0) * f;
@@ -543,331 +871,24 @@ $("tl").addEventListener("wheel", e => {
   drawTimeline();
 }, {passive: false});
 
-function drawTimeline() {
-  const {ctx, w, h} = canvasCtx($("tl"));
-  ctx.clearRect(0, 0, w, h);
-  const X = t => viewX(w, t);
-  const curveTop = 8, curveH = 92;
-
-  // energy area (only points in view)
-  ctx.beginPath();
-  let started = false;
-  const emax = Math.max(...S.energy, 0.001);
-  S.energy.forEach((v, i) => {
-    const t = i / (S.energy.length - 1) * S.dur;
-    if (t < T1.v0 - 0.1 || t > T1.v1 + 0.1) return;
-    const x = X(t), y = curveTop + curveH - v / emax * curveH;
-    if (!started) { ctx.moveTo(x, y); started = true; }
-    else ctx.lineTo(x, y);
-  });
-  if (started) {
-    ctx.lineTo(X(Math.min(S.dur, T1.v1)), curveTop + curveH);
-    ctx.lineTo(X(Math.max(0, T1.v0)), curveTop + curveH);
-    ctx.closePath();
-    const g = ctx.createLinearGradient(0, curveTop, 0, curveTop + curveH);
-    g.addColorStop(0, "rgba(255,45,149,.55)");
-    g.addColorStop(1, "rgba(255,45,149,.06)");
-    ctx.fillStyle = g; ctx.fill();
-  }
-
-  // punch ticks
-  ctx.strokeStyle = "rgba(0,229,255,.8)"; ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  const pmax = Math.max(...S.punch, 0.001);
-  S.punch.forEach((v, i) => {
-    const t = i / (S.punch.length - 1) * S.dur;
-    if (t < T1.v0 || t > T1.v1) return;
-    if (v > 0.15 * pmax) {
-      const y0 = curveTop + curveH;
-      ctx.moveTo(X(t), y0);
-      ctx.lineTo(X(t), y0 - v / pmax * 26);
-    }
-  });
-  ctx.stroke();
-
-  // phase bands
-  const bandY = 116, bandH = 34;
-  for (const sp of S.spans) {
-    const a = Math.max(X(sp[1]), 0), b = Math.min(X(sp[2]), w);
-    if (b <= 0 || a >= w) continue;
-    ctx.fillStyle = phaseCol(sp[0]) + "55";
-    ctx.fillRect(a, bandY, b - a, bandH);
-    ctx.strokeStyle = phaseCol(sp[0]);
-    ctx.strokeRect(a + .5, bandY + .5, b - a - 1, bandH - 1);
-    ctx.fillStyle = "#fff"; ctx.font = "11px Segoe UI";
-    const tw = ctx.measureText(sp[0]).width;
-    if (b - a > tw + 10) ctx.fillText(sp[0], (a + b) / 2 - tw / 2, bandY + 21);
-  }
-  // playhead
-  const ap = $("audioPrev");
-  if (ap.duration && ap.currentTime >= T1.v0 && ap.currentTime <= T1.v1) {
-    const px = X(ap.currentTime);
-    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
-  }
-  // drag handles (boundaries)
-  for (let i = 0; i < S.spans.length - 1; i++) {
-    const px = X(S.spans[i][2]);
-    if (px < -10 || px > w + 10) continue;
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.moveTo(px - 6, 4); ctx.lineTo(px + 6, 4); ctx.lineTo(px, 14);
-    ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.beginPath(); ctx.moveTo(px, 4); ctx.lineTo(px, h); ctx.stroke();
-  }
-}
-
-// pointer interaction on the timeline
-$("tl").addEventListener("pointerdown", e => {
-  const rect = e.target.getBoundingClientRect();
-  const px = e.clientX - rect.left;
-  const py = e.clientY - rect.top;
-  const w = rect.width;
-  closePhaseMenu();
-  if (T1.menuTimer) { clearTimeout(T1.menuTimer); T1.menuTimer = null; }
-  // right-drag or alt+drag: pan the view
-  if (e.button === 2 || e.altKey) {
-    T1.pan = {px: px, v0: T1.v0, v1: T1.v1};
-    e.target.setPointerCapture(e.pointerId);
-    return;
-  }
-  // near a boundary handle? start dragging it
-  let best = -1, bd = 1e9;
-  for (let i = 0; i < S.spans.length - 1; i++) {
-    const bx = viewX(w, S.spans[i][2]);
-    const d = Math.abs(bx - px);
-    if (d < bd) { bd = d; best = i; }
-  }
-  if (bd <= 10) {
-    T1.drag = best;
-    e.target.setPointerCapture(e.pointerId);
-    return;
-  }
-  const t = viewT(w, px);
-  // clicked in the phase-band region?
-  if (py >= 108) {
-    let idx = -1;
-    for (let i = 0; i < S.spans.length; i++) {
-      if (t >= S.spans[i][1] && t <= S.spans[i][2]) { idx = i; break; }
-    }
-    if (idx >= 0) {
-      const now = performance.now();
-      // manual double-click detection (e.detail is unreliable in some
-      // webviews): two clicks within 380 ms, close together in x
-      const isDouble = (now - T1.lastClickT < 380)
-                       && Math.abs(px - T1.lastClickX) < 24;
-      if (isDouble) {
-        // double-click: split the section here (add a divider)
-        T1.lastClickT = 0;
-        splitSpan(idx, t);
-      } else {
-        // single click: open the phase menu, delayed slightly so a quick
-        // second click registers as a double-click and splits instead
-        T1.lastClickT = now;
-        T1.lastClickX = px;
-        T1.menuTimer = setTimeout(() => {
-          T1.menuTimer = null;
-          openPhaseMenu(idx, e.clientX, e.clientY);
-        }, 300);
-      }
-    }
-    return;
-  }
-  // clicked in the curve region: seek, and keep scrubbing while held
-  const ap = $("audioPrev");
-  if (ap.duration) ap.currentTime = Math.max(0, Math.min(t, S.dur - 0.05));
-  T1.scrub = true;
-  e.target.setPointerCapture(e.pointerId);
-});
-
-// right-click is used for panning, not the context menu
-$("tl").addEventListener("contextmenu", e => e.preventDefault());
-
-$("tl").addEventListener("pointermove", e => {
-  if (T1.scrub && (e.buttons & 1)) {
-    const rect = e.target.getBoundingClientRect();
-    const t = viewT(rect.width, e.clientX - rect.left);
-    const ap2 = $("audioPrev");
-    if (ap2.duration) ap2.currentTime = Math.max(0, Math.min(t, S.dur - 0.05));
-    drawTimeline();
-    return;
-  }
-  if (T1.pan) {
-    const rect = e.target.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const w = rect.width;
-    const dt = (T1.pan.px - px) / w * (T1.pan.v1 - T1.pan.v0);
-    viewSet(T1.pan.v0 + dt, T1.pan.v1 + dt);
-    drawTimeline();
-    return;
-  }
-  if (T1.drag < 0) return;
-  const rect = e.target.getBoundingClientRect();
-  const px = e.clientX - rect.left;
-  const w = rect.width;
-  let t = viewT(w, px);
-  const i = T1.drag;
-  t = Math.max(S.spans[i][1] + 0.5, Math.min(t, S.spans[i + 1][2] - 0.5));
-  S.spans[i][2] = t;
-  S.spans[i + 1][1] = t;
-  drawTimeline();
-});
-
-$("tl").addEventListener("pointercancel", () => {
-  T1.pan = null; T1.scrub = false; T1.drag = -1;
-});
-
-$("tl").addEventListener("pointerup", async e => {
-  if (T1.pan) { T1.pan = null; return; }
-  if (T1.scrub) { T1.scrub = false; return; }
-  if (T1.drag < 0) return;
-  T1.drag = -1;
-  try {
-    S.plan = await api("/api/replan", {
-      method: "POST",
-      body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
-    }).then(j => j.plan);
-    renderSceneChips();
-  } catch (err) { $("status").textContent = err.message; }
-});
-
-$("audioPrev").addEventListener("timeupdate", () => drawTimeline());
-
-// spacebar toggles the audio preview (not while typing or in controls)
-document.addEventListener("keydown", e => {
-  if (e.code !== "Space") return;
-  const t = e.target;
-  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA"
-            || t.tagName === "SELECT" || t.isContentEditable)) return;
-  e.preventDefault();
-  const ap = $("audioPrev");
-  if (ap.paused) ap.play(); else ap.pause();
-});
-
-// ---------- projects (save / load phase edits + settings) ----------
-function projName() {
-  const v = $("projName").value.trim();
-  return v || (S.name ? S.name.split(".")[0] + "_viz" : "");
-}
-
-async function refreshProjectList(selectName) {
-  let names = [];
-  try { names = (await api("/api/projects")).names; } catch (e) {}
-  const sel = $("projList");
-  const prev = selectName || sel.value;
-  sel.innerHTML = names.length
-    ? names.map(n => `<option ${n === prev ? "selected" : ""}>${n}</option>`).join("")
-    : `<option value="">(none)</option>`;
-  if (selectName && names.includes(selectName)) sel.value = selectName;
-}
-
-function projectData() {
-  return {
-    name: S.name, fps: S.fps, n: S.n,
-    spans: S.spans,
-    out_dir: $("outDir").value.trim() || "outputs",
-    out_name: $("outName").value.trim(),
-    size: $("outSize").value
-  };
-}
-
-async function saveProject() {
-  const name = projName();
-  if (!name) return alert("Give the project a name (or pick an input first).");
-  if (!S.name) return alert("Pick an input first, then save.");
-  $("projName").value = name;
-  try {
-    await api("/api/project/save", {
-      method: "POST",
-      body: JSON.stringify({name: name, data: projectData()})
-    });
-    await refreshProjectList(name);
-    $("status").textContent = "saved project " + name;
-  } catch (e) { alert("save failed: " + e.message); }
-}
-
-async function loadProjectSel() {
-  const name = $("projList").value;
-  if (!name) return alert("No project selected.");
-  $("projName").value = name;
-  try {
-    const d = await api("/api/project/load?name=" + encodeURIComponent(name));
-    // restore output settings
-    $("outDir").value = d.out_dir || "outputs";
-    $("outName").value = d.out_name || "";
-    if (d.size) $("outSize").value = d.size;
-    // re-analyze the input, then apply the saved phase edits
-    if (d.name && S.inputs.includes(d.name)) {
-      await selectInput(d.name);
-    } else {
-      $("status").textContent = "input " + (d.name || "?") + " not in inputs/";
-      return;
-    }
-    if (d.spans && d.spans.length) {
-      S.spans = d.spans;
-      S.plan = await api("/api/replan", {
-        method: "POST",
-        body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
-      }).then(j => j.plan);
-      drawTimeline();
-      renderSceneChips();
-      $("status").textContent = "loaded project " + name;
-    }
-  } catch (e) { alert("load failed: " + e.message); }
-}
-
-async function deleteProjectSel() {
-  const name = $("projList").value;
-  if (!name) return alert("No project selected.");
-  if (!confirm("Delete project " + name + "?")) return;
-  try {
-    await api("/api/project/delete", {
-      method: "POST", body: JSON.stringify({name: name})
-    });
-    await refreshProjectList();
-  } catch (e) { alert("delete failed: " + e.message); }
-}
-
-// ---------- output folder picking ----------
-async function pickFolder() {
-  try {
-    if (window.showDirectoryPicker) {
-      const dir = await window.showDirectoryPicker();
-      const j = await api("/api/resolve_dir?name=" +
-                          encodeURIComponent(dir.name));
-      $("outDir").value = j.path;
-      return;
-    }
-    throw new Error("no picker");
-  } catch (err) {
-    // fall back: ask for a path
-    const p = prompt("Type the absolute path of the output folder:",
-                     $("outDir").value);
-    if (p) $("outDir").value = p;
-  }
-}
-
 // ---------- render ----------
 async function startRender() {
   if (!S.name) return alert("Choose an input first.");
+  S.active = "audio";
   $("renderBtn").disabled = true;
-  $("resultBox").classList.add("hidden");
+  $("monVid").classList.add("hidden"); $("monEmpty").classList.remove("hidden");
+  $("monEmpty").textContent = "rendering...";
   $("progOuter").classList.remove("hidden");
   $("progInner").style.width = "0%";
   $("renderStatus").textContent = "rendering...";
-  const outName = $("outName").value.trim() ||
-    (S.name.split(".")[0] + "_viz.mp4");
+  const outName = $("outName").value.trim() || (S.name.split(".")[0] + "_viz.mp4");
   try {
     const j = await api("/api/render", {
       method: "POST",
       body: JSON.stringify({
-        name: S.name,
-        out_dir: $("outDir").value.trim() || "outputs",
-        out_name: outName,
-        size: $("outSize").value,
-        fps: S.fps,
-        spans: S.spans
+        name: S.name, out_dir: $("outDir").value.trim() || "outputs",
+        out_name: outName, size: $("outSize").value, fps: S.fps,
+        spans: S.spans, beats: S.beats
       })
     });
     S.job = j.job;
@@ -875,15 +896,15 @@ async function startRender() {
   } catch (err) {
     $("renderStatus").textContent = "failed: " + err.message;
     $("renderBtn").disabled = false;
+    $("monEmpty").textContent = "Render a video to preview it here, " +
+      "or play the input audio from the Input panel.";
   }
 }
-
 async function pollJob() {
   const j = await api("/api/status?job=" + S.job);
   if (j.state === "running") {
     $("progInner").style.width = (j.progress * 100).toFixed(1) + "%";
-    $("renderStatus").textContent =
-      "rendering... " + (j.progress * 100).toFixed(0) + "%";
+    $("renderStatus").textContent = "rendering... " + (j.progress * 100).toFixed(0) + "%";
     setTimeout(pollJob, 700);
   } else if (j.state === "done") {
     $("progInner").style.width = "100%";
@@ -893,70 +914,25 @@ async function pollJob() {
   } else {
     $("renderStatus").textContent = "error: " + j.error;
     $("renderBtn").disabled = false;
+    $("monEmpty").textContent = "Render failed. See status.";
   }
 }
-
 function showResult(path) {
   S.result = path;
-  const box = $("resultBox");
-  box.classList.remove("hidden");
-  const v = $("resultVid");
+  S.active = "video";
+  const v = $("monVid");
   v.src = "/video?path=" + encodeURIComponent(path);
+  v.currentTime = 0;
   $("dlLink").href = "/video?path=" + encodeURIComponent(path);
   $("dlLink").setAttribute("download", path.split(/[\\/]/).pop());
   $("resultInfo").textContent = path;
-  drawResultTimeline();
+  $("monEmpty").classList.add("hidden");
+  v.classList.remove("hidden");
+  updateMonitor();
+  updatePlayheadUI();
+  drawTimeline();
 }
-
-// ---------- result timeline (synced) ----------
-function drawResultTimeline() {
-  const {ctx, w, h} = canvasCtx($("tl2"));
-  ctx.clearRect(0, 0, w, h);
-  const X = t => t / S.dur * (w - 8) + 4;
-  const bandY = 10, bandH = 52;
-  for (const sp of S.plan) {
-    const a = X(sp.s0), b = X(sp.s1);
-    ctx.fillStyle = (SCENE_COL[sp.scene] || "#555") + "44";
-    ctx.fillRect(a, bandY, b - a, bandH);
-    ctx.strokeStyle = SCENE_COL[sp.scene] || "#555";
-    ctx.strokeRect(a + .5, bandY + .5, b - a - 1, bandH - 1);
-    ctx.fillStyle = "#fff"; ctx.font = "11px Segoe UI";
-    if (b - a > 40) {
-      ctx.fillText(sp.scene, (a + b) / 2 - 16, bandY + 20);
-      ctx.fillStyle = "#bbb";
-      ctx.fillText(fmtT(sp.s0), a + 4, bandY + 38);
-    }
-    if (sp.drop !== null) {  // drop marker
-      const px = X(sp.drop);
-      ctx.fillStyle = "#fff";
-      ctx.beginPath();
-      ctx.moveTo(px, bandY + bandH);
-      ctx.lineTo(px - 5, bandY + bandH + 9);
-      ctx.lineTo(px + 5, bandY + bandH + 9);
-      ctx.closePath(); ctx.fill();
-    }
-  }
-  const v = $("resultVid");
-  if (v.currentTime) {
-    const px = X(v.currentTime);
-    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
-  }
-}
-
-$("resultVid").addEventListener("timeupdate", () => {
-  if (S.result) drawResultTimeline();
-});
-$("tl2").addEventListener("click", e => {
-  const rect = e.target.getBoundingClientRect();
-  const t = (e.clientX - rect.left - 4) / (rect.width - 8) * S.dur;
-  const v = $("resultVid");
-  if (v.duration) v.currentTime = Math.max(0, Math.min(t, S.dur - 0.1));
-});
-window.addEventListener("resize", () => {
-  if (S.dur) drawTimeline();
-  if (S.result) drawResultTimeline();
-});
+window.addEventListener("resize", () => { if (S.dur) drawTimeline(); });
 </script>
 </body>
 </html>

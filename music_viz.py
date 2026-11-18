@@ -154,6 +154,42 @@ def analyze(samples, sr, fps):
     }
 
 
+def extract_beats(feats):
+    """Pick the punch peaks that drive the visuals, as editable beats.
+
+    Returns a list of [time_sec, intensity] for each local peak of the
+    punch curve (prominence + minimum spacing filtered). The UI shows
+    these as draggable markers; their position and intensity can be
+    edited by ear.
+    """
+    n = feats["n"]
+    fps = feats["fps"]
+    p = feats["punch"].astype(np.float64)
+    pm = float(np.percentile(p, 90)) if n else 0.0
+    beats = []
+    min_gap = int(round(0.28 * fps))
+    last = -10 ** 9
+    for i in range(1, n - 1):
+        if p[i] > p[i - 1] and p[i] >= p[i + 1] and p[i] > 0.22 * pm:
+            if i - last >= min_gap:
+                beats.append([round(i / fps, 3), round(float(min(1.0, p[i])), 3)])
+                last = i
+    return beats
+
+
+def punch_from_beats(beats, n, fps, decay=0.80):
+    """Build a per-frame punch curve from a list of [time, intensity]
+    beats: a sharp spike at each beat that decays like the audio punch."""
+    out = np.zeros(n, np.float32)
+    for t, inten in beats:
+        i = int(round(t * fps))
+        i = max(0, min(n - 1, i))
+        out[i] = max(out[i], min(3.0, inten))
+    for i in range(1, n):
+        out[i] = max(out[i], out[i - 1] * decay)
+    return out
+
+
 # ------------------------- phase segmentation -------------------------
 
 def segment_phases(feats, fps):
@@ -1228,7 +1264,6 @@ class StarsScene(Scene):
         rows = []
         cx, cy = self.drift(t)
         local = max(0.0, t - self.t0)
-        rot = 0.55 * local            # spin grows as the intro progresses
         dz = (0.0035 + 0.016 * overall + 0.030 * punch) \
             * (1.0 + 0.8 * min(1.0, local / 12.0))  # zoom speeds up
         z = self.z
@@ -1241,7 +1276,9 @@ class StarsScene(Scene):
             r = self.R * (1.0 - zn) / zn * 0.055
             if r > self.limit:
                 continue
-            th = self.th[n] + rot
+            # differential rotation: angular velocity rises with radius,
+            # so the outer stars sweep around faster (a vortex)
+            th = self.th[n] + local * 0.55 * (0.20 + 1.6 * (r / max(self.R, 1.0)))
             x = cx + r * math.cos(th)
             y = cy + r * math.sin(th)
             b = 1.0 - zn
@@ -1713,12 +1750,18 @@ class Director:
 
 # ------------------------- render loop -------------------------
 
-def render(feats, plan, W, H, fps, writer, use_gpu, progress_cb=None):
+def render(feats, plan, W, H, fps, writer, use_gpu, progress_cb=None,
+           beats=None):
     if use_gpu:
         S = _torch_shim(_cuda_dev())
     else:
         S = _np_shim()
     n = feats["n"]
+    # punch curve: from user-edited beats if given, else from the audio
+    if beats:
+        punch_curve = punch_from_beats(beats, n, fps)
+    else:
+        punch_curve = feats["punch"]
 
     fx = S.arange(W)
     fy = S.arange(H)
@@ -1741,7 +1784,7 @@ def render(feats, plan, W, H, fps, writer, use_gpu, progress_cb=None):
             v = float(feats[b][i])
             st = e_state[b]
             e_state[b] = min(st + (v - st) * (0.55 if v > st else 0.10), 1.6)
-        punch_state = max(float(feats["punch"][i]), punch_state * 0.80)
+        punch_state = max(float(punch_curve[i]), punch_state * 0.80)
         overall = (0.5 * e_state["bass"] + 0.3 * e_state["mid"]
                    + 0.2 * e_state["treb"])
 
@@ -1777,12 +1820,14 @@ def cuda_available():
 
 def render_video(audio, out, W=1280, H=720, fps=30, adelay=40,
                  use_gpu=False, use_nvenc=False, phase_spans=None,
-                 plan=None, progress_cb=None):
+                 plan=None, progress_cb=None, beats=None):
     """Decode, analyze, segment, and render a video file.
 
     phase_spans: optional user-edited list of [phase, i0, i1] (frames).
     plan:        optional pre-built scene plan (list of dicts); if given,
                  phase_spans is ignored and no segmentation runs.
+    beats:       optional list of [time_sec, intensity]; if given, the
+                 punch curve is built from these instead of the audio.
     Returns (plan, spans). Raises RuntimeError if ffmpeg fails.
     """
     print("decoding audio...")
@@ -1835,7 +1880,8 @@ def render_video(audio, out, W=1280, H=720, fps=30, adelay=40,
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     try:
-        render(feats, plan, W, H, fps, proc.stdin, use_gpu, progress_cb)
+        render(feats, plan, W, H, fps, proc.stdin, use_gpu, progress_cb,
+               beats=beats)
     except BrokenPipeError:
         proc.wait()
         raise RuntimeError("ffmpeg encoding failed")
