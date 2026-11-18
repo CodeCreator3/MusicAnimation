@@ -1151,9 +1151,10 @@ def _cuda_dev():
 def main():
     ap = argparse.ArgumentParser(
         description="Turn an audio file into a glowing beat-driven MP4.")
-    ap.add_argument("audio", help="input audio file (mp3, wav, m4a, ...)")
+    ap.add_argument("audio", help="input audio file "
+                    "(default: inputs/<audio> if not found as given)")
     ap.add_argument("-o", "--out", help="output .mp4 path "
-                    "(default: <input>_viz.mp4)")
+                    "(default: outputs/<input>_viz.mp4)")
     ap.add_argument("--size", default="1280x720", help="WxH, default 1280x720")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--adelay", type=int, default=40,
@@ -1170,7 +1171,17 @@ def main():
     args = ap.parse_args()
 
     W, H = (int(v) for v in args.size.lower().split("x"))
-    out = args.out or (os.path.splitext(args.audio)[0] + "_viz.mp4")
+    # convenience: try inputs/ if the file is not found as given
+    if not os.path.exists(args.audio) \
+            and os.path.exists(os.path.join("inputs", args.audio)):
+        args.audio = os.path.join("inputs", args.audio)
+    if not os.path.exists(args.audio):
+        sys.exit("input file not found: " + args.audio)
+    out = args.out or (os.path.join("outputs",
+                                    os.path.splitext(
+                                        os.path.basename(args.audio))[0]
+                                    + "_viz.mp4"))
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
 
     # ---- pick render + encode paths ----
     use_gpu = False

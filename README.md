@@ -56,13 +56,18 @@ either it falls back to the CPU render automatically.
 ## Usage
 
 ```
-.venv\Scripts\python music_viz.py path\to\song.mp3
+.venv\Scripts\python music_viz.py inputs\song.mp3
 ```
+
+Input files live in `inputs/`, output videos in `outputs/`:
+- if you pass a bare name (`music_viz.py song.mp3`) it is looked up in
+  `inputs/` automatically
+- the output defaults to `outputs/<input>_viz.mp4`
 
 Options:
 
 ```
--o OUT         output file (default: <input>_viz.mp4)
+-o OUT         output file (default: outputs/<input>_viz.mp4)
 --size WxH     default 1280x720
 --fps N        default 30
 --render M     gpu | cpu | auto (default auto, GPU if available)
@@ -98,7 +103,9 @@ see which phase maps to which scene. To tune the segmentation, edit
 
 - `music_viz.py` - the main program (segmentation, director, 6 scenes,
   GPU + CPU field renderers)
-- `make_test_track.py` - generates `test_track.mp3` (15 s of synthetic
-  kick + pad + noise for testing)
-- `test_track_viz.mp4` - example output
-- `sm_vivid.mp4` - full song with the state-machine scenes
+- `make_test_track.py` - generates `inputs/test_track.mp3` (15 s of
+  synthetic kick + pad + noise for testing)
+- `inputs/` - audio files (mp3, wav, m4a, ...)
+- `outputs/` - rendered MP4s, e.g. `outputs/test_track_viz.mp4`
+  (example) and `outputs/sm_vivid.mp4` (full song with the
+  state-machine scenes)
