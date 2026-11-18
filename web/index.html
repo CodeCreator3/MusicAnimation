@@ -72,9 +72,14 @@
   #phaseMenu {
     position: fixed; z-index: 50;
     background: var(--panel2); border: 1px solid var(--line);
-    border-radius: 8px; padding: 6px; display: grid;
-    grid-template-columns: 1fr 1fr; gap: 4px;
+    border-radius: 8px; padding: 6px;
     box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    display: none;
+  }
+  #phaseMenu.open {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
   }
   #phaseMenu button {
     display: flex; align-items: center; gap: 7px;
@@ -311,7 +316,7 @@ function openPhaseMenu(idx, x, y) {
     };
     menu.appendChild(b);
   }
-  menu.classList.remove("hidden");
+  menu.classList.add("open");
   const mw = menu.offsetWidth, mh = menu.offsetHeight;
   let mx = x - mw / 2, my = y + 10;
   mx = Math.max(8, Math.min(mx, window.innerWidth - mw - 8));
@@ -321,7 +326,7 @@ function openPhaseMenu(idx, x, y) {
 }
 
 function closePhaseMenu() {
-  $("phaseMenu").classList.add("hidden");
+  $("phaseMenu").classList.remove("open");
 }
 
 // any click outside the menu closes it
