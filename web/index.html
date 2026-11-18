@@ -667,30 +667,34 @@ function drawTimeline() {
     ctx.fillStyle = g; ctx.fill();
   }
 
-  // punch ticks (blue) + draggable beat circles
-  const pmax = Math.max(...S.punch, 0.001);
-  ctx.strokeStyle = "rgba(0,229,255,.7)"; ctx.lineWidth = 1.5; ctx.beginPath();
-  S.punch.forEach((v, i) => {
-    const t = i / (S.punch.length - 1) * S.dur;
-    if (t < T1.v0 || t > T1.v1) return;
-    if (v > 0.15 * pmax) {
-      const y0 = TL.curveTop + TL.curveH;
-      ctx.moveTo(X(t), y0);
-      ctx.lineTo(X(t), y0 - v / pmax * 30);
-    }
-  });
-  ctx.stroke();
+  // beats: when zoomed in, each beat is ONE object -- a tick whose height
+// is its intensity, with a draggable circle on the tip. When zoomed out
+// we show the raw punch curve as a denser overview instead.
+  const y0base = TL.curveTop + TL.curveH;
   if (beatsShown()) {
     for (const b of S.beats) {
       const x = X(b[0]);
-      if (x < -10 || x > w + 10) continue;
-      const y = beatY(b[1]);
-      // draggable marker circle sitting on the existing beat tick
+      if (x < -12 || x > w + 12) continue;
+      const tipY = beatY(b[1]);
+      ctx.strokeStyle = "rgba(0,229,255,.9)"; ctx.lineWidth = 2; 
+      ctx.beginPath(); ctx.moveTo(x, y0base); ctx.lineTo(x, tipY); ctx.stroke();
       ctx.beginPath();
-      ctx.arc(x, y, 6, 0, 6.283);
+      ctx.arc(x, tipY, 6, 0, 6.283);
       ctx.fillStyle = "#00e5ff"; ctx.fill();
       ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
     }
+  } else {
+    const pmax = Math.max(...S.punch, 0.001);
+    ctx.strokeStyle = "rgba(0,229,255,.5)"; ctx.lineWidth = 1.5; ctx.beginPath();
+    S.punch.forEach((v, i) => {
+      const t = i / (S.punch.length - 1) * S.dur;
+      if (t < T1.v0 || t > T1.v1) return;
+      if (v > 0.15 * pmax) {
+        ctx.moveTo(X(t), y0base);
+        ctx.lineTo(X(t), y0base - v / pmax * 30);
+      }
+    });
+    ctx.stroke();
   }
 
   // phase bands
