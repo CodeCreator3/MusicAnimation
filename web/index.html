@@ -411,7 +411,7 @@ function canvasCtx(cv) {
 }
 
 const T1 = {drag: -1, pan: null, scrub: false, menuTimer: null,
-            v0: 0, v1: 1};
+            lastClickT: 0, lastClickX: 0, v0: 0, v1: 1};
 
 function viewSet(v0, v1) {
   const MIN = 1.5;
@@ -573,16 +573,24 @@ $("tl").addEventListener("pointerdown", e => {
       if (t >= S.spans[i][1] && t <= S.spans[i][2]) { idx = i; break; }
     }
     if (idx >= 0) {
-      if (e.detail >= 2) {
+      const now = performance.now();
+      // manual double-click detection (e.detail is unreliable in some
+      // webviews): two clicks within 380 ms, close together in x
+      const isDouble = (now - T1.lastClickT < 380)
+                       && Math.abs(px - T1.lastClickX) < 24;
+      if (isDouble) {
         // double-click: split the section here (add a divider)
+        T1.lastClickT = 0;
         splitSpan(idx, t);
       } else {
-        // single click: open the phase menu, but delay it slightly so a
-        // quick second click (double-click) cancels it and splits instead
+        // single click: open the phase menu, delayed slightly so a quick
+        // second click registers as a double-click and splits instead
+        T1.lastClickT = now;
+        T1.lastClickX = px;
         T1.menuTimer = setTimeout(() => {
           T1.menuTimer = null;
           openPhaseMenu(idx, e.clientX, e.clientY);
-        }, 280);
+        }, 300);
       }
     }
     return;
