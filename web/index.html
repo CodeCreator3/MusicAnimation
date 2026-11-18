@@ -148,6 +148,12 @@
       boundaries, click a band to change its phase, play the audio and
       tweak by ear</h2>
     <canvas id="tl" height="170"></canvas>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:4px">
+      <button id="zoomReset" class="hidden" style="padding:3px 10px;font-size:12px">reset zoom</button>
+      <span id="zoomInfo" class="hint"></span>
+      <span class="hint">wheel = zoom &middot; shift+wheel / alt+drag = pan &middot;
+        click a band = choose phase</span>
+    </div>
     <div id="phaseMenu" class="hidden"></div>
     <div class="legend">
       <span><i style="background:#7a5cff"></i>intro</span>
@@ -271,6 +277,7 @@ async function analyze() {
     $("timelineSec").classList.remove("hidden");
     $("renderSec").classList.remove("hidden");
     $("resultBox").classList.add("hidden");
+    viewSet(0, j.dur);
     drawTimeline();
     renderSceneChips();
     $("status").textContent = "";
@@ -360,29 +367,85 @@ function canvasCtx(cv) {
   return {ctx, w: w, h: h};
 }
 
-const T1 = {drag: -1};
+const T1 = {drag: -1, pan: null, v0: 0, v1: 1};
+
+function viewSet(v0, v1) {
+  const MIN = 1.5;
+  if (v1 - v0 < MIN) { const c = (v0 + v1) / 2; v0 = c - MIN / 2; v1 = c + MIN / 2; }
+  if (v0 < 0) { v1 -= v0; v0 = 0; }
+  if (v1 > S.dur) { v0 -= v1 - S.dur; v1 = S.dur; }
+  if (v0 < 0) v0 = 0;
+  T1.v0 = v0; T1.v1 = v1;
+  updateZoomUI();
+}
+
+function updateZoomUI() {
+  const zoomed = T1.v1 - T1.v0 < S.dur - 0.01;
+  $("zoomReset").classList.toggle("hidden", !zoomed);
+  $("zoomInfo").textContent = zoomed
+    ? "viewing " + fmtT(T1.v0) + " - " + fmtT(T1.v1)
+    : "";
+}
+
+function viewX(w, t) {
+  return (t - T1.v0) / (T1.v1 - T1.v0) * (w - 8) + 4;
+}
+
+function viewT(w, px) {
+  return T1.v0 + (px - 4) / (w - 8) * (T1.v1 - T1.v0);
+}
+
+$("zoomReset").onclick = () => {
+  viewSet(0, S.dur);
+  drawTimeline();
+};
+
+$("tl").addEventListener("wheel", e => {
+  e.preventDefault();
+  const rect = e.target.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const w = rect.width;
+  if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+    // horizontal scroll: pan
+    const d = (e.deltaX || e.deltaY) / w * (T1.v1 - T1.v0);
+    viewSet(T1.v0 + d, T1.v1 + d);
+  } else {
+    // zoom around the cursor
+    const f = e.deltaY > 0 ? 1.18 : 1 / 1.18;
+    const anchor = viewT(w, px);
+    const span = (T1.v1 - T1.v0) * f;
+    const ratio = (anchor - T1.v0) / (T1.v1 - T1.v0);
+    viewSet(anchor - ratio * span, anchor - ratio * span + span);
+  }
+  drawTimeline();
+}, {passive: false});
 
 function drawTimeline() {
   const {ctx, w, h} = canvasCtx($("tl"));
   ctx.clearRect(0, 0, w, h);
-  const t0 = 0, t1v = S.dur;
-  const X = t => (t - t0) / (t1v - t0) * (w - 8) + 4;
+  const X = t => viewX(w, t);
   const curveTop = 8, curveH = 92;
 
-  // energy area
+  // energy area (only points in view)
   ctx.beginPath();
-  ctx.moveTo(X(0), curveTop + curveH);
+  let started = false;
   const emax = Math.max(...S.energy, 0.001);
   S.energy.forEach((v, i) => {
     const t = i / (S.energy.length - 1) * S.dur;
-    ctx.lineTo(X(t), curveTop + curveH - v / emax * curveH);
+    if (t < T1.v0 - 0.1 || t > T1.v1 + 0.1) return;
+    const x = X(t), y = curveTop + curveH - v / emax * curveH;
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else ctx.lineTo(x, y);
   });
-  ctx.lineTo(X(S.dur), curveTop + curveH);
-  ctx.closePath();
-  const g = ctx.createLinearGradient(0, curveTop, 0, curveTop + curveH);
-  g.addColorStop(0, "rgba(255,45,149,.55)");
-  g.addColorStop(1, "rgba(255,45,149,.06)");
-  ctx.fillStyle = g; ctx.fill();
+  if (started) {
+    ctx.lineTo(X(Math.min(S.dur, T1.v1)), curveTop + curveH);
+    ctx.lineTo(X(Math.max(0, T1.v0)), curveTop + curveH);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, curveTop, 0, curveTop + curveH);
+    g.addColorStop(0, "rgba(255,45,149,.55)");
+    g.addColorStop(1, "rgba(255,45,149,.06)");
+    ctx.fillStyle = g; ctx.fill();
+  }
 
   // punch ticks
   ctx.strokeStyle = "rgba(0,229,255,.8)"; ctx.lineWidth = 1.5;
@@ -390,6 +453,7 @@ function drawTimeline() {
   const pmax = Math.max(...S.punch, 0.001);
   S.punch.forEach((v, i) => {
     const t = i / (S.punch.length - 1) * S.dur;
+    if (t < T1.v0 || t > T1.v1) return;
     if (v > 0.15 * pmax) {
       const y0 = curveTop + curveH;
       ctx.moveTo(X(t), y0);
@@ -401,7 +465,8 @@ function drawTimeline() {
   // phase bands
   const bandY = 116, bandH = 34;
   for (const sp of S.spans) {
-    const a = X(sp[1]), b = X(sp[2]);
+    const a = Math.max(X(sp[1]), 0), b = Math.min(X(sp[2]), w);
+    if (b <= 0 || a >= w) continue;
     ctx.fillStyle = (PHASE_COL[sp[0]] || "#555") + "55";
     ctx.fillRect(a, bandY, b - a, bandH);
     ctx.strokeStyle = PHASE_COL[sp[0]] || "#555";
@@ -412,7 +477,7 @@ function drawTimeline() {
   }
   // playhead
   const ap = $("audioPrev");
-  if (ap.duration) {
+  if (ap.duration && ap.currentTime >= T1.v0 && ap.currentTime <= T1.v1) {
     const px = X(ap.currentTime);
     ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
@@ -420,6 +485,7 @@ function drawTimeline() {
   // drag handles (boundaries)
   for (let i = 0; i < S.spans.length - 1; i++) {
     const px = X(S.spans[i][2]);
+    if (px < -10 || px > w + 10) continue;
     ctx.fillStyle = "#fff";
     ctx.beginPath();
     ctx.moveTo(px - 6, 4); ctx.lineTo(px + 6, 4); ctx.lineTo(px, 14);
@@ -436,10 +502,16 @@ $("tl").addEventListener("pointerdown", e => {
   const py = e.clientY - rect.top;
   const w = rect.width;
   closePhaseMenu();
+  // alt+drag: pan the view
+  if (e.altKey) {
+    T1.pan = {px: px, v0: T1.v0, v1: T1.v1};
+    e.target.setPointerCapture(e.pointerId);
+    return;
+  }
   // near a boundary handle? start dragging it
   let best = -1, bd = 1e9;
   for (let i = 0; i < S.spans.length - 1; i++) {
-    const bx = S.spans[i][2] / S.dur * (w - 8) + 4;
+    const bx = viewX(w, S.spans[i][2]);
     const d = Math.abs(bx - px);
     if (d < bd) { bd = d; best = i; }
   }
@@ -448,7 +520,7 @@ $("tl").addEventListener("pointerdown", e => {
     e.target.setPointerCapture(e.pointerId);
     return;
   }
-  const t = (px - 4) / (w - 8) * S.dur;
+  const t = viewT(w, px);
   // clicked in the phase-band region? open the phase menu for that span
   if (py >= 108) {
     for (let i = 0; i < S.spans.length; i++) {
@@ -465,11 +537,20 @@ $("tl").addEventListener("pointerdown", e => {
 });
 
 $("tl").addEventListener("pointermove", e => {
+  if (T1.pan) {
+    const rect = e.target.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const w = rect.width;
+    const dt = (T1.pan.px - px) / w * (T1.pan.v1 - T1.pan.v0);
+    viewSet(T1.pan.v0 + dt, T1.pan.v1 + dt);
+    drawTimeline();
+    return;
+  }
   if (T1.drag < 0) return;
   const rect = e.target.getBoundingClientRect();
   const px = e.clientX - rect.left;
   const w = rect.width;
-  let t = (px - 4) / (w - 8) * S.dur;
+  let t = viewT(w, px);
   const i = T1.drag;
   t = Math.max(S.spans[i][1] + 0.5, Math.min(t, S.spans[i + 1][2] - 0.5));
   S.spans[i][2] = t;
@@ -478,6 +559,7 @@ $("tl").addEventListener("pointermove", e => {
 });
 
 $("tl").addEventListener("pointerup", async e => {
+  if (T1.pan) { T1.pan = null; return; }
   if (T1.drag < 0) return;
   T1.drag = -1;
   try {
