@@ -163,7 +163,7 @@
     <div class="legend">
       <span><i style="background:#7a5cff"></i>intro</span>
       <span><i style="background:#ff9800"></i>build</span>
-      <span><i style="background:#ffe100"></i>suspense</span>
+      <span><i style="background:#ffc400"></i>suspense</span>
       <span><i style="background:#ff2d95"></i>release</span>
       <span><i style="background:#22c55e"></i>sustain</span>
       <span><i style="background:#38bdf8"></i>break</span>
@@ -199,7 +199,7 @@
 <script>
 const PHASES = ["intro","build","suspense","release","sustain","break","outro"];
 const PHASE_COL = {
-  intro:"#7a5cff", build:"#ff9800", suspense:"#ffe100",
+  intro:"#7a5cff", build:"#ff9800", suspense:"#ffc400",
   release:"#ff2d95", sustain:"#22c55e", break:"#38bdf8", outro:"#64748b"
 };
 const SCENE_COL = {
@@ -296,9 +296,11 @@ function openPhaseMenu(idx, x, y) {
   const menu = $("phaseMenu");
   menu.innerHTML = "";
   const cur = S.spans[idx][0];
-  for (const p of PHASES) {
+  const opts = PHASES.slice();
+  if (opts.indexOf(cur) < 0) opts.push(cur);
+  for (const p of opts) {
     const b = document.createElement("button");
-    b.innerHTML = `<i style="background:${PHASE_COL[p]}"></i>${p}` +
+    b.innerHTML = `<i style="background:${phaseCol(p)}"></i>${p}` +
       (p === cur ? " <span style=\"opacity:.55\">\u2713</span>" : "");
     if (p === cur) b.classList.add("current");
     b.onclick = async e => {
@@ -354,6 +356,11 @@ function renderSceneChips() {
 function fmtT(t) {
   const m = Math.floor(t / 60), s = t - m * 60;
   return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
+}
+
+// phase color that is always a valid 6-digit hex (unknown -> neutral)
+function phaseCol(p) {
+  return PHASE_COL[p] || "#888888";
 }
 
 // ---------- timeline canvas ----------
@@ -472,13 +479,13 @@ function drawTimeline() {
   for (const sp of S.spans) {
     const a = Math.max(X(sp[1]), 0), b = Math.min(X(sp[2]), w);
     if (b <= 0 || a >= w) continue;
-    ctx.fillStyle = (PHASE_COL[sp[0]] || "#555") + "55";
+    ctx.fillStyle = phaseCol(sp[0]) + "55";
     ctx.fillRect(a, bandY, b - a, bandH);
-    ctx.strokeStyle = PHASE_COL[sp[0]] || "#555";
+    ctx.strokeStyle = phaseCol(sp[0]);
     ctx.strokeRect(a + .5, bandY + .5, b - a - 1, bandH - 1);
     ctx.fillStyle = "#fff"; ctx.font = "11px Segoe UI";
-    const mid = (a + b) / 2;
-    if (b - a > 34) ctx.fillText(sp[0], mid - 14, bandY + 21);
+    const tw = ctx.measureText(sp[0]).width;
+    if (b - a > tw + 10) ctx.fillText(sp[0], (a + b) / 2 - tw / 2, bandY + 21);
   }
   // playhead
   const ap = $("audioPrev");

@@ -329,7 +329,15 @@ def segment_phases(feats, fps):
         else:
             final.append([sp[0], sp[1], susp])
         final.append(["suspense", susp, sp[2]])
-    return final
+
+    # merge adjacent spans with the same phase (e.g. two intro runs)
+    out = []
+    for sp in final:
+        if out and out[-1][0] == sp[0]:
+            out[-1][2] = sp[2]
+        else:
+            out.append(sp)
+    return out
 
 
 def plan_scenes(spans, fps):
