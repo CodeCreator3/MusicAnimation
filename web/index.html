@@ -157,7 +157,7 @@
       <button id="zoomReset" class="hidden" style="padding:3px 10px;font-size:12px">reset zoom</button>
       <span id="zoomInfo" class="hint"></span>
       <span class="hint">wheel = zoom &middot; shift+wheel / alt+drag = pan &middot;
-        click a band = choose phase</span>
+        click band = change phase &middot; double-click band = add divider</span>
     </div>
     <div id="phaseMenu" class="hidden"></div>
     <div class="legend">
@@ -291,6 +291,27 @@ async function analyze() {
   }
 }
 
+// split a section into two at time t (adds a divider). The right half
+// starts with the same phase, so it can be re-labelled in the menu.
+function splitSpan(idx, t) {
+  const sp = S.spans[idx];
+  const MINLEN = 0.4;
+  if (t - sp[1] < MINLEN || sp[2] - t < MINLEN) return;
+  S.spans.splice(idx + 1, 0, [sp[0], t, sp[2]]);
+  sp[2] = t;
+  drawTimeline();
+  replan();
+}
+
+// re-plan scenes from the current spans (shared by menu, split, drag)
+function replan() {
+  return api("/api/replan", {
+    method: "POST",
+    body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
+  }).then(j => { S.plan = j.plan; renderSceneChips(); })
+   .catch(err => { $("status").textContent = err.message; });
+}
+
 // ---------- phase menu (click a band on the timeline) ----------
 function openPhaseMenu(idx, x, y) {
   const menu = $("phaseMenu");
@@ -308,15 +329,25 @@ function openPhaseMenu(idx, x, y) {
       S.spans[idx][0] = p;
       closePhaseMenu();
       drawTimeline();
-      try {
-        S.plan = await api("/api/replan", {
-          method: "POST",
-          body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
-        }).then(j => j.plan);
-        renderSceneChips();
-      } catch (err) { $("status").textContent = err.message; }
+      replan();
     };
     menu.appendChild(b);
+  }
+  // delete the divider at the start of this section (merge into prev)
+  if (idx > 0) {
+    const del = document.createElement("button");
+    del.style.gridColumn = "1 / -1";
+    del.style.color = "#ff7b7b";
+    del.innerHTML = "\u2715 delete divider before this section";
+    del.onclick = e => {
+      e.stopPropagation();
+      S.spans[idx - 1][2] = S.spans[idx][2];
+      S.spans.splice(idx, 1);
+      closePhaseMenu();
+      drawTimeline();
+      replan();
+    };
+    menu.appendChild(del);
   }
   menu.classList.add("open");
   const mw = menu.offsetWidth, mh = menu.offsetHeight;
@@ -379,7 +410,8 @@ function canvasCtx(cv) {
   return {ctx, w: w, h: h};
 }
 
-const T1 = {drag: -1, pan: null, scrub: false, v0: 0, v1: 1};
+const T1 = {drag: -1, pan: null, scrub: false, menuTimer: null,
+            v0: 0, v1: 1};
 
 function viewSet(v0, v1) {
   const MIN = 1.5;
@@ -514,6 +546,7 @@ $("tl").addEventListener("pointerdown", e => {
   const py = e.clientY - rect.top;
   const w = rect.width;
   closePhaseMenu();
+  if (T1.menuTimer) { clearTimeout(T1.menuTimer); T1.menuTimer = null; }
   // right-drag or alt+drag: pan the view
   if (e.button === 2 || e.altKey) {
     T1.pan = {px: px, v0: T1.v0, v1: T1.v1};
@@ -533,12 +566,23 @@ $("tl").addEventListener("pointerdown", e => {
     return;
   }
   const t = viewT(w, px);
-  // clicked in the phase-band region? open the phase menu for that span
+  // clicked in the phase-band region?
   if (py >= 108) {
+    let idx = -1;
     for (let i = 0; i < S.spans.length; i++) {
-      if (t >= S.spans[i][1] && t <= S.spans[i][2]) {
-        openPhaseMenu(i, e.clientX, e.clientY);
-        break;
+      if (t >= S.spans[i][1] && t <= S.spans[i][2]) { idx = i; break; }
+    }
+    if (idx >= 0) {
+      if (e.detail >= 2) {
+        // double-click: split the section here (add a divider)
+        splitSpan(idx, t);
+      } else {
+        // single click: open the phase menu, but delay it slightly so a
+        // quick second click (double-click) cancels it and splits instead
+        T1.menuTimer = setTimeout(() => {
+          T1.menuTimer = null;
+          openPhaseMenu(idx, e.clientX, e.clientY);
+        }, 280);
       }
     }
     return;
