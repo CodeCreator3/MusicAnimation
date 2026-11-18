@@ -204,21 +204,22 @@ class Orb:
 
 
 def build_orbs(rng, W, H, s):
-    bass = [Orb(rng, "bass", (85 + 14 * i) * s, 0.76 + 0.045 * i,
-                0.24, 0.18,
+    # neon palette: magenta/pink bass, cyan mids, yellow-green treble
+    bass = [Orb(rng, "bass", (85 + 14 * i) * s, 0.87 + 0.03 * i,
+                0.34, 0.34,
                 (0.20 + 0.04 * i) * W, (0.14 + 0.03 * i) * H,
                 0.18 + 0.05 * i, 0.14 + 0.04 * i,
-                float(rng.random() * 6.28), 9.0) for i in range(3)]
-    mid = [Orb(rng, "mid", (46 + 10 * i) * s, 0.60 + 0.04 * i,
-               0.30, 0.26,
+                float(rng.random() * 6.28), 12.0) for i in range(3)]
+    mid = [Orb(rng, "mid", (46 + 10 * i) * s, 0.50 + 0.03 * i,
+               0.42, 0.42,
                0.30 * W, 0.22 * H,
                0.45 + 0.15 * i, 0.38 + 0.12 * i,
-               float(rng.random() * 6.28), 6.5) for i in range(3)]
-    treb = [Orb(rng, "treb", (16 + 5 * i) * s, 0.48 + 0.022 * i,
-                0.38, 0.85,
+               float(rng.random() * 6.28), 8.5) for i in range(3)]
+    treb = [Orb(rng, "treb", (16 + 5 * i) * s, 0.10 + 0.05 * i,
+                0.52, 1.30,
                 0.40 * W, 0.32 * H,
                 1.0 + 0.30 * i, 0.85 + 0.25 * i,
-                float(rng.random() * 6.28), 5.0) for i in range(4)]
+                float(rng.random() * 6.28), 7.5) for i in range(4)]
     return bass + mid + treb
 
 
@@ -247,7 +248,7 @@ def render_cpu(feats, W, H, fps, writer):
 
     buf = np.zeros((H, W, 3), np.float32)
     frame = np.empty((H, W, 3), np.uint8)
-    exposure = 0.85
+    exposure = 1.0
     done = n // 12 + 1
 
     for i in range(n):
@@ -267,8 +268,8 @@ def render_cpu(feats, W, H, fps, writer):
         buf[...] = 0
 
         # faint ambient halo, hue drifting over time
-        hc = hsv(0.55 + 0.02 * t, 0.85, 1.0)
-        a = 0.05 * (0.4 + 0.6 * overall)
+        hc = hsv((0.72 + 0.03 * t) % 1.0, 0.95, 1.0)
+        a = 0.07 * (0.4 + 0.6 * overall)
         buf += halo[:, :, None] * np.array(
             [a * hc[0], a * hc[1], a * hc[2]], np.float32)[None, None, :]
 
@@ -279,31 +280,31 @@ def render_cpu(feats, W, H, fps, writer):
             x, y = ax + orb.off[0], ay + orb.off[1]
             env = e_state[orb.band]
             hue = (orb.hue + 0.02 * t) % 1.0
-            if orb.band == "bass":          # big + deep: wide, dim, slow
-                sig = orb.sigma * (0.85 + 0.55 * env)
-                ag, ac = orb.amp_g * (0.5 + 0.7 * env), orb.amp_c * (0.4 + 0.9 * env)
+            if orb.band == "bass":          # big + deep: wide, heavy
+                sig = orb.sigma * (0.80 + 0.55 * env)
+                ag, ac = orb.amp_g * (0.6 + 0.9 * env), orb.amp_c * (0.5 + 1.1 * env)
             elif orb.band == "mid":
-                sig = orb.sigma * (0.80 + 0.50 * env)
-                ag, ac = orb.amp_g * (0.5 + 0.8 * env), orb.amp_c * (0.5 + 0.9 * env)
+                sig = orb.sigma * (0.75 + 0.50 * env)
+                ag, ac = orb.amp_g * (0.6 + 1.0 * env), orb.amp_c * (0.6 + 1.1 * env)
             else:                            # small + near: tight, bright, fast
-                sig = orb.sigma * (0.70 + 0.60 * env)
-                ag, ac = orb.amp_g * (0.35 + 1.1 * env), orb.amp_c * (0.3 + 1.3 * env)
+                sig = orb.sigma * (0.65 + 0.60 * env)
+                ag, ac = orb.amp_g * (0.45 + 1.3 * env), orb.amp_c * (0.4 + 1.5 * env)
             add_glow(buf, gx, gy, gx2, gy2, x, y, sig, ag, ac,
-                     hsv(hue, 1.0, 1.0), hsv(hue, 0.55, 1.0), W, H)
+                     hsv(hue, 1.0, 1.0), hsv(hue, 0.15, 1.0), W, H)
 
-        # central core, flashes on punch
+        # central core, flashes on punch (cycling through the full spectrum)
         core_sig = (26 + 30 * overall + 20 * punch_state) * s
-        core_amp = 0.22 + 0.70 * overall + 1.0 * punch_state
-        hue_c = (0.50 + 0.025 * t) % 1.0
+        core_amp = 0.30 + 0.85 * overall + 1.2 * punch_state
+        hue_c = (0.04 * t) % 1.0
         add_glow(buf, gx, gy, gx2, gy2, cx, cy, core_sig, core_amp,
-                 core_amp * 1.1, hsv(hue_c, 0.75, 1.0), hsv(hue_c, 0.35, 1.0), W, H)
+                 core_amp * 1.1, hsv(hue_c, 1.0, 1.0), hsv(hue_c, 0.15, 1.0), W, H)
 
         # expanding rings on hard punches
         if punch_state > 0.40 and t - last_ring_t > 0.14:
-            rings.append({"r": 40 * s, "w": 18 * s,
-                          "amp": 0.55 + 0.5 * punch_state,
-                          "sp": (7.0 + 26.0 * punch_state) * s,
-                          "hue": (0.52 + 0.02 * t) % 1.0})
+            rings.append({"r": 40 * s, "w": 10 * s,
+                          "amp": 0.8 + 0.7 * punch_state,
+                          "sp": (9.0 + 34.0 * punch_state) * s,
+                          "hue": (0.10 + 0.05 * t) % 1.0})
             last_ring_t = t
         rings = [r for r in rings
                  if r["amp"] > 0.02 and r["r"] < math.hypot(W, H)]
@@ -315,7 +316,7 @@ def render_cpu(feats, W, H, fps, writer):
                 r["sp"] *= 0.97
                 r["amp"] *= 0.935
                 f = np.exp(-((d - r["r"]) ** 2) / (2.0 * r["w"] ** 2)) * r["amp"]
-                col = hsv(r["hue"], 0.9, 1.0)
+                col = hsv(r["hue"], 1.0, 1.0)
                 buf[:, :, 0] += f * col[0]
                 buf[:, :, 1] += f * col[1]
                 buf[:, :, 2] += f * col[2]
@@ -373,7 +374,7 @@ def render_gpu(feats, W, H, fps, writer, dev):
     last_ring_t = -1.0
     diag = math.hypot(W, H)
     halo_sig = min(W, H) * 0.55
-    exposure = 0.85
+    exposure = 1.0
     done = n // 12 + 1
     sync = torch.cuda.synchronize if dev.type == "cuda" else (lambda: None)
 
@@ -401,27 +402,27 @@ def render_gpu(feats, W, H, fps, writer, dev):
             x, y = ax + orb.off[0], ay + orb.off[1]
             env = e_state[orb.band]
             hue = (orb.hue + 0.02 * t) % 1.0
-            if orb.band == "bass":          # big + deep: wide, dim, slow
-                sig = orb.sigma * (0.85 + 0.55 * env)
-                ag, ac = orb.amp_g * (0.5 + 0.7 * env), orb.amp_c * (0.4 + 0.9 * env)
+            if orb.band == "bass":          # big + deep: wide, heavy
+                sig = orb.sigma * (0.80 + 0.55 * env)
+                ag, ac = orb.amp_g * (0.6 + 0.9 * env), orb.amp_c * (0.5 + 1.1 * env)
             elif orb.band == "mid":
-                sig = orb.sigma * (0.80 + 0.50 * env)
-                ag, ac = orb.amp_g * (0.5 + 0.8 * env), orb.amp_c * (0.5 + 0.9 * env)
+                sig = orb.sigma * (0.75 + 0.50 * env)
+                ag, ac = orb.amp_g * (0.6 + 1.0 * env), orb.amp_c * (0.6 + 1.1 * env)
             else:                            # small + near: tight, bright, fast
-                sig = orb.sigma * (0.70 + 0.60 * env)
-                ag, ac = orb.amp_g * (0.35 + 1.1 * env), orb.amp_c * (0.3 + 1.3 * env)
+                sig = orb.sigma * (0.65 + 0.60 * env)
+                ag, ac = orb.amp_g * (0.45 + 1.3 * env), orb.amp_c * (0.4 + 1.5 * env)
             col_g = hsv(hue, 1.0, 1.0)
-            col_c = hsv(hue, 0.55, 1.0)
+            col_c = hsv(hue, 0.15, 1.0)
             pts[off:off + 7] = (x, y, sig * 2.6, ag, col_g[0], col_g[1], col_g[2])
             off += 7
             pts[off:off + 7] = (x, y, sig, ac, col_c[0], col_c[1], col_c[2])
             off += 7
-        # central core, flashes on punch
+        # central core, flashes on punch (cycling through the full spectrum)
         core_sig = (26 + 30 * overall + 20 * punch_state) * s
-        core_amp = 0.22 + 0.70 * overall + 1.0 * punch_state
-        hue_c = (0.50 + 0.025 * t) % 1.0
-        col_g = hsv(hue_c, 0.75, 1.0)
-        col_c = hsv(hue_c, 0.35, 1.0)
+        core_amp = 0.30 + 0.85 * overall + 1.2 * punch_state
+        hue_c = (0.04 * t) % 1.0
+        col_g = hsv(hue_c, 1.0, 1.0)
+        col_c = hsv(hue_c, 0.15, 1.0)
         pts[off:off + 7] = (cx, cy, core_sig * 2.6, core_amp,
                             col_g[0], col_g[1], col_g[2])
         off += 7
@@ -430,16 +431,16 @@ def render_gpu(feats, W, H, fps, writer, dev):
         off += 7
         # ambient halo, hue drifting over time (full-screen gaussian
         # centered on the canvas center, as in render_cpu)
-        hc = hsv(0.55 + 0.02 * t, 0.85, 1.0)
-        a = 0.05 * (0.4 + 0.6 * overall)
+        hc = hsv((0.72 + 0.03 * t) % 1.0, 0.95, 1.0)
+        a = 0.07 * (0.4 + 0.6 * overall)
         pts[off:off + 7] = (cx0, cy0, halo_sig, 1.0,
                             a * hc[0], a * hc[1], a * hc[2])
 
         # ---- rings (same order of cull / advance / cull as render_cpu) ----
         if punch_state > 0.40 and t - last_ring_t > 0.14:
-            rings.append([40 * s, 18 * s, 0.55 + 0.5 * punch_state,
-                          (7.0 + 26.0 * punch_state) * s,
-                          (0.52 + 0.02 * t) % 1.0])
+            rings.append([40 * s, 10 * s, 0.8 + 0.7 * punch_state,
+                          (9.0 + 34.0 * punch_state) * s,
+                          (0.10 + 0.05 * t) % 1.0])
             last_ring_t = t
         rings = [r for r in rings if r[2] > 0.02 and r[0] < diag]
         for r in rings:
@@ -464,7 +465,7 @@ def render_gpu(feats, W, H, fps, writer, dev):
         if rings:
             data = []
             for r in rings:
-                col = hsv(r[4], 0.9, 1.0)
+                col = hsv(r[4], 1.0, 1.0)
                 data += [r[0], r[1], r[2], col[0], col[1], col[2]]
             R = torch.tensor(data, dtype=torch.float32, device=dev)
             R = R.view(len(rings), _RTS)
