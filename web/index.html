@@ -303,16 +303,17 @@ function fmtT(t) {
 // ---------- timeline canvas ----------
 function canvasCtx(cv) {
   const dpr = window.devicePixelRatio || 1;
-  const h = parseInt(cv.getAttribute("height"));
-  const pw = Math.max(1, Math.round(cv.clientWidth * dpr));
-  const ph = Math.round(h * dpr);
+  const w = cv.clientWidth;        // CSS px, stable
+  const h = cv.clientHeight;       // CSS px, stable (from #tl / #tl2 rules)
+  const pw = Math.max(1, Math.round(w * dpr));
+  const ph = Math.max(1, Math.round(h * dpr));
   if (cv.width !== pw || cv.height !== ph) {
     cv.width = pw;
     cv.height = ph;
   }
   const ctx = cv.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return {ctx, w: cv.clientWidth, h: h};
+  return {ctx, w: w, h: h};
 }
 
 const T1 = {drag: -1};
