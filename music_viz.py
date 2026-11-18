@@ -871,8 +871,11 @@ class LasersScene(Scene):
 class BurstScene(Scene):
     """the full drop arc: build -> suspense -> release.
 
-    build:    particles spiral in from off-screen, brightness and ring
-              activity rise, the core swells -- tension accumulates
+    build:    matter condenses into a singularity -- 180 infall streams
+              spiral in as motion streaks (accelerating as they near
+              the center), an accretion disk tightens, a razor-thin
+              photon ring forms, and the dense core swells; white-hot
+              pixels appear at max tension
     suspense: everything collapses into one small white-hot point at
               maximum tension, with a held flicker and a final ring
               closing in on it
@@ -897,45 +900,113 @@ class BurstScene(Scene):
         self.v = self.R * (1.8 + 2.8 * rng.random(self.N))
         self.hue_b = (0.50 + 0.16 * rng.random(self.N)) % 1.0
         self.hue_e = (0.95 + 0.18 * rng.random(self.N)) % 1.0
+        # accreting infall streams (the matter condensing into the singularity)
+        self.N_in = 180
+        self.in_r = (self.R * (0.20 + 1.00 * rng.random(self.N_in)))
+        self.in_th = rng.uniform(0.0, 2 * math.pi, self.N_in)
+        self.in_sp = rng.uniform(0.7, 1.5, self.N_in)
+        self.in_sw = rng.uniform(0.6, 1.7, self.N_in) * \
+            rng.choice(np.array([-1.0, 1.0]), self.N_in)
 
     def tick(self, i, t, env, punch, overall):
         rows = []
         cx, cy = self.drift(t)
         if t < self.t_exp:
-            # ---- build + suspense: spiral in, then collapse ----
+            # ---- build + suspense: matter condenses into a singularity ----
             bt = max(self.t_susp - self.t0, 1e-3)
             et = max(self.t_exp - self.t_susp, 1e-3)
             b = min(max((t - self.t0) / bt, 0.0), 1.0)   # build progress
             c = min(max((t - self.t_susp) / et, 0.0), 1.0)  # collapse
             b2 = b * b * (3.0 - 2.0 * b)
             c2 = c * c
-            # radius: spiral from r0 to 0.35*R, then collapse to a point
+            flick = 1.0 + 0.12 * c2 * math.sin(t * 46.0)
+            R = self.R
+
+            # --- continuous infall: streams of matter falling in ---
+            # they accelerate (in_r shrinks faster as tension builds),
+            # swirl up as they near the center, and respawn at the rim so
+            # the accretion never stops. Each is drawn as a motion streak
+            # from where it was last frame to where it is now.
+            dt = 1.0 / self.fps
+            fall = R * (0.10 + 0.55 * b2)            # infall speed (px/s)
+            sat_i = 1.0 - 0.75 * c2                   # -> white near collapse
+            for n in range(self.N_in):
+                # swirl speeds up as the stream gets closer (angular momentum)
+                near = 1.0 - min(1.0, self.in_r[n] / R)
+                sw = self.in_sw[n] * (0.5 + 3.0 * near) * (0.6 + 1.4 * b2)
+                # current position
+                r = self.in_r[n]
+                th = self.in_th[n]
+                x = cx + r * math.cos(th)
+                y = cy + r * math.sin(th)
+                # previous position (where the streak trails from)
+                pr = r + fall * dt * self.in_sp[n]
+                pth = th - sw * dt
+                px = cx + pr * math.cos(pth)
+                py = cy + pr * math.sin(pth)
+                # streak length: longer as it falls faster
+                L = math.hypot(x - px, y - py)
+                if L < 1.5:
+                    L = 1.5
+                ext = min(L * (1.0 + 1.5 * b2), 26.0 * self.s)
+                ux, uy = (x - px) / L, (y - py) / L
+                tail_x, tail_y = x - ux * ext, y - uy * ext
+                amp = (0.5 + 1.1 * b2 + 1.3 * c2) * (0.55 + 0.45 * near)
+                hue = (self.hue_b[n % self.N] + 0.04 * t) % 1.0
+                col = hsv(hue, sat_i, 1.0)
+                rows.append(line(tail_x, tail_y, x, y, 2.0 * self.s, amp,
+                                 col))
+                rows.append(point(x, y, 2.5 * self.s, amp * 1.2,
+                                  hsv(hue, sat_i, 1.0)))
+                # advance the stream; respawn at the rim when it hits center
+                self.in_r[n] -= fall * dt * self.in_sp[n]
+                self.in_th[n] += sw * dt
+                if self.in_r[n] < R * 0.02:
+                    self.in_r[n] = R * (0.55 + 0.95 * self.rng.random())
+                    self.in_th[n] = self.rng.random() * 2 * math.pi
+
+            # --- the original orbiting particles, condensing in ---
             r = self.r0 * (1.0 - 0.65 * b2) * (1.0 - 0.985 * c2)
             th = self.th + self.swirl * (1.8 * b + 5.5 * c2)
             x = cx + r * np.cos(th)
             y = cy + r * np.sin(th)
-            # brightness rises with tension; held flicker at the peak
-            flick = 1.0 + 0.12 * c2 * math.sin(t * 46.0)
-            amp = (0.35 + 1.15 * b2 + 0.55 * overall) * flick
-            sig = (2.5 + 5.0 * b2 + 7.0 * c2) * self.s
-            # hue converges toward white as it collapses
-            sat = 1.0 - 0.80 * c2
+            amp = (0.35 + 1.0 * b2 + 0.4 * overall) * flick
+            sig = (2.0 + 4.0 * b2 + 6.0 * c2) * self.s
             for n in range(self.N):
                 hue = (self.hue_b[n] + 0.04 * t) % 1.0
                 rows.append(point(float(x[n]), float(y[n]), sig, amp,
-                                  hsv(hue, sat, 1.0)))
-            # converging rings: outward pulses speed up in the build,
-            # then a final ring snaps shut during the collapse
+                                  hsv(hue, sat_i, 1.0)))
+
+            # --- accretion disk: a bright, tightening ring of infall ---
+            disk_r = R * (0.30 + 0.45 * b2) * (1.0 - 0.85 * c2)
+            rows.append(ring(cx, cy, disk_r, (3.0 + 6.0 * b2) * self.s,
+                             (0.5 + 2.2 * b2 + 2.5 * c2) * flick,
+                             hsv((0.55 + 0.25 * b2) % 1.0, 1.0 - 0.6 * c2,
+                                 1.0)))
+            rows.append(ring(cx, cy, disk_r * 0.7,
+                             (2.0 + 4.0 * b2) * self.s,
+                             (0.35 + 1.5 * b2 + 2.0 * c2) * flick,
+                             hsv((0.60 + 0.20 * b2) % 1.0, 1.0 - 0.6 * c2,
+                                 1.0)))
+
+            # --- photon ring: a razor-thin hot ring around the core ---
+            ph_r = R * (0.10 + 0.10 * b2) * (1.0 - 0.6 * c2)
+            rows.append(ring(cx, cy, ph_r, 1.5 * self.s,
+                             (1.0 + 3.0 * b2 + 3.0 * c2) * flick,
+                             hsv(0.0, 0.2, 1.0)))
+
+            # --- converging shock rings (matter piling onto the core) ---
             if c < 0.999:
-                rr = self.R * (1.0 - 0.98 * c2)
+                rr = R * (1.0 - 0.98 * c2)
                 rows.append(ring(cx, cy, rr, (4.0 + 5.0 * c2) * self.s,
                                  0.35 + 1.3 * c2, hsv(0.60, 1.0, 1.0)))
             spd = 0.5 + 2.2 * b2
             ph = (t * spd) % 1.0
-            rows.append(ring(cx, cy, self.R * (1.0 - ph), 4 * self.s,
+            rows.append(ring(cx, cy, R * (1.0 - ph), 4 * self.s,
                              (0.25 + 0.9 * b2) * (0.4 + 0.6 * ph),
                              hsv(0.55, 1.0, 1.0)))
-            # core swells, then becomes a white-hot point at max tension
+
+            # --- the singularity core: dark, dense, growing, then white-hot ---
             core_sig = (10 + 70 * b2 + 26 * c2) * self.s
             core_amp = (0.4 + 1.8 * b2 + 3.2 * c2) * flick
             hue_c = (0.50 + 0.40 * b2) % 1.0
