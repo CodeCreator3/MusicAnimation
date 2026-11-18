@@ -190,6 +190,26 @@ def punch_from_beats(beats, n, fps, decay=0.80):
     return out
 
 
+def estimate_beat_period(feats, beats):
+    """Estimate the song's beat period (seconds between beats) from the
+    gaps between detected beat markers. Falls back to 0.5 s (120 bpm).
+    Used by scenes that need a tempo-locked clock (the snakes)."""
+    if len(beats) < 4:
+        return 0.5
+    gaps = [beats[i + 1][0] - beats[i][0] for i in range(len(beats) - 1)]
+    gaps = [g for g in gaps if 0.15 < g < 1.2]
+    if not gaps:
+        return 0.5
+    med = float(np.median(gaps))
+    # if the median gap is large, the beats are likely every 2nd beat;
+    # fold gaps > 0.8 * 1.2 down to their half to find the true beat
+    if med > 0.45:
+        half = [g / 2.0 for g in gaps if g > 0.8]
+        if len(half) >= 3:
+            med = min(med, float(np.median(half)))
+    return max(0.18, min(med, 1.0))
+
+
 # ------------------------- phase segmentation -------------------------
 
 def segment_phases(feats, fps):
@@ -801,12 +821,13 @@ def build_orbs(rng, W, H, s):
 class Scene:
     """Base scene. tick() returns a list of field rows for one frame."""
 
-    def __init__(self, W, H, s, fps, rng, span):
+    def __init__(self, W, H, s, fps, rng, span, beat_period=0.5):
         self.W, self.H, self.s, self.fps = W, H, s, fps
         self.rng = rng
         self.span = span
         self.cx0, self.cy0 = W / 2.0, H / 2.0
         self.diag = math.hypot(W, H)
+        self.beat_period = beat_period
         # optional full-screen flash / camera shake requested by a scene
         self.fx = {"flash": 0.0, "shake": 0.0}
 
@@ -999,24 +1020,25 @@ class BurstScene(Scene):
         self.fx["shake"] = 0.0
         cx, cy = self.drift(t)
         if t < self.t_exp:
-            # ---- build + suspense: matter condenses into a singularity ----
+            # ---- build: everything condenses into a singularity;
+            #      suspense: the singularity HOLDS (tight, white-hot,
+            #      flickering, still consuming, beams straining outward)
             bt = max(self.t_susp - self.t0, 1e-3)
             et = max(self.t_exp - self.t_susp, 1e-3)
             b = min(max((t - self.t0) / bt, 0.0), 1.0)   # build progress
-            c = min(max((t - self.t_susp) / et, 0.0), 1.0)  # collapse
+            c = min(max((t - self.t_susp) / et, 0.0), 1.0)  # suspense (held)
             b2 = b * b * (3.0 - 2.0 * b)
             c2 = c * c
-            flick = 1.0 + 0.12 * c2 * math.sin(t * 46.0)
+            flick = (1.0 + 0.10 * c2 * math.sin(t * 42.0)
+                     + 0.04 * math.sin(t * 13.0))
             R = self.R
 
-            # --- continuous infall: streams of matter falling in ---
-            # they accelerate (in_r shrinks faster as tension builds),
-            # swirl up as they near the center, and respawn at the rim so
-            # the accretion never stops. Each is drawn as a motion streak
-            # from where it was last frame to where it is now.
+            # --- continuous infall: streams of matter fall in through the
+            #     build; during the suspense they slow and feed tightly into
+            #     the held point (the singularity keeps consuming) ---
             dt = 1.0 / self.fps
-            fall = R * (0.10 + 0.55 * b2)            # infall speed (px/s)
-            sat_i = 1.0 - 0.75 * c2                   # -> white near collapse
+            fall = R * (0.10 + 0.55 * b2) * (1.0 - 0.5 * c2)
+            sat_i = 1.0 - 0.75 * c2
             for n in range(self.N_in):
                 # swirl speeds up as the stream gets closer (angular momentum)
                 near = 1.0 - min(1.0, self.in_r[n] / R)
@@ -1049,12 +1071,13 @@ class BurstScene(Scene):
                 self.in_r[n] -= fall * dt * self.in_sp[n]
                 self.in_th[n] += sw * dt
                 if self.in_r[n] < R * 0.02:
-                    self.in_r[n] = R * (0.55 + 0.95 * self.rng.random())
+                    self.in_r[n] = R * (0.40 + 0.60 * self.rng.random())
                     self.in_th[n] = self.rng.random() * 2 * math.pi
 
-            # --- the original orbiting particles, condensing in ---
-            r = self.r0 * (1.0 - 0.65 * b2) * (1.0 - 0.985 * c2)
-            th = self.th + self.swirl * (1.8 * b + 5.5 * c2)
+            # --- the condensing particles: collapse into a tight cluster
+            #     by the end of the build, then HOLD during the suspense ---
+            r = self.r0 * (1.0 - 0.85 * b2) * (1.0 - 0.10 * c2)
+            th = self.th + self.swirl * (1.8 * b + 0.4 * b2)
             x = cx + r * np.cos(th)
             y = cy + r * np.sin(th)
             amp = (0.35 + 1.0 * b2 + 0.4 * overall) * flick
@@ -1064,37 +1087,35 @@ class BurstScene(Scene):
                 rows.append(point(float(x[n]), float(y[n]), sig, amp,
                                   hsv(hue, sat_i, 1.0)))
 
-            # --- accretion disk: a bright, tightening ring of infall ---
-            disk_r = R * (0.30 + 0.45 * b2) * (1.0 - 0.85 * c2)
+            # --- accretion disk: tightens to a hot ring by the end of the
+            #     build and holds, still spinning, through the suspense ---
+            disk_r = R * (0.30 + 0.45 * b2) * (1.0 - 0.85 * b2)
             rows.append(ring(cx, cy, disk_r, (3.0 + 6.0 * b2) * self.s,
-                             (0.5 + 2.2 * b2 + 2.5 * c2) * flick,
+                             (0.5 + 2.2 * b2 + 1.6 * c2) * flick,
                              hsv((0.55 + 0.25 * b2) % 1.0, 1.0 - 0.6 * c2,
                                  1.0)))
             rows.append(ring(cx, cy, disk_r * 0.7,
                              (2.0 + 4.0 * b2) * self.s,
-                             (0.35 + 1.5 * b2 + 2.0 * c2) * flick,
+                             (0.35 + 1.5 * b2 + 1.2 * c2) * flick,
                              hsv((0.60 + 0.20 * b2) % 1.0, 1.0 - 0.6 * c2,
                                  1.0)))
 
-            # --- photon ring: a razor-thin hot ring around the core ---
-            ph_r = R * (0.10 + 0.10 * b2) * (1.0 - 0.6 * c2)
+            # --- photon ring: a razor-thin hot ring around the core, held ---
+            ph_r = R * (0.10 + 0.10 * b2) * (1.0 - 0.6 * b2)
             rows.append(ring(cx, cy, ph_r, 1.5 * self.s,
-                             (1.0 + 3.0 * b2 + 3.0 * c2) * flick,
+                             (1.0 + 3.0 * b2 + 2.0 * c2) * flick,
                              hsv(0.0, 0.2, 1.0)))
 
-            # --- converging shock rings (matter piling onto the core) ---
-            if c < 0.999:
-                rr = R * (1.0 - 0.98 * c2)
-                rows.append(ring(cx, cy, rr, (4.0 + 5.0 * c2) * self.s,
-                                 0.35 + 1.3 * c2, hsv(0.60, 1.0, 1.0)))
-            spd = 0.5 + 2.2 * b2
-            ph = (t * spd) % 1.0
-            rows.append(ring(cx, cy, R * (1.0 - ph), 4 * self.s,
-                             (0.25 + 0.9 * b2) * (0.4 + 0.6 * ph),
-                             hsv(0.55, 1.0, 1.0)))
+            # --- a final pinch ring that locks the singularity in at the
+            #     build -> suspense transition ---
+            if c < 0.5:
+                pinch = 1.0 - 2.0 * c
+                rr = R * (0.40 + 0.60 * (1.0 - b2)) * (0.5 + 0.5 * c)
+                rows.append(ring(cx, cy, rr, 5 * self.s,
+                                 0.9 * pinch, hsv(0.60, 1.0, 1.0)))
 
-            # --- radiating light beams: thin in the build, brightening and
-            #     multiplying as the suspense peaks (the core overflows)
+            # --- radiating light beams: build up and multiply through the
+            #     suspense (the core overflows, straining at the seams)
             beam_n = 4 + int(12 * c2)
             for k in range(beam_n):
                 th = self.beam_th[k % self.N_beam] + 0.15 * math.sin(t * 3.0 + k)
@@ -1105,9 +1126,10 @@ class BurstScene(Scene):
                 rows.append(line(cx, cy, bx, by, (1.0 + 3.0 * c2) * self.s,
                                  bamp, hsv((0.55 + 0.2 * c2) % 1.0, 1.0 - 0.5 * c2, 1.0)))
 
-            # --- the singularity core: dark, dense, growing, then white-hot ---
-            core_sig = (10 + 70 * b2 + 26 * c2) * self.s
-            core_amp = (0.4 + 1.8 * b2 + 3.2 * c2) * flick
+            # --- the singularity core: forms by the end of the build, then
+            #     holds white-hot and flickering through the suspense ---
+            core_sig = (10 + 70 * b2 + 6 * c2) * self.s
+            core_amp = (0.4 + 1.8 * b2 + 2.6 * c2) * flick
             hue_c = (0.50 + 0.40 * b2) % 1.0
             rows.append(point(cx, cy, core_sig, core_amp,
                               hsv(hue_c, 1.0 - 0.7 * c2, 1.0)))
@@ -1330,7 +1352,7 @@ class StarsScene(Scene):
         cx, cy = self.drift(t)
         local = max(0.0, t - self.t0)
         dz = (0.0035 + 0.016 * overall + 0.030 * punch) \
-            * (1.0 + 0.8 * min(1.0, local / 12.0))  # zoom speeds up
+            * (1.0 + 0.5 * min(1.0, local / 12.0))  # gentle zoom ramp
         z = self.z
         for n in range(self.N):
             zn = z[n] - dz * self.sf[n]
@@ -1343,7 +1365,7 @@ class StarsScene(Scene):
                 continue
             # differential rotation: angular velocity rises with radius,
             # so the outer stars sweep around faster (a vortex)
-            th = self.th[n] + local * 0.55 * (0.20 + 1.6 * (r / max(self.R, 1.0)))
+            th = self.th[n] + local * 0.25 * (0.20 + 1.0 * min(1.5, r / max(self.R, 1.0)))
             x = cx + r * math.cos(th)
             y = cy + r * math.sin(th)
             b = 1.0 - zn
@@ -1424,58 +1446,72 @@ class PolyScene(Scene):
 
 
 class SnakeScene(Scene):
-    """lanes of small sharp squares that light up cell-by-cell in a
-    beat-quantized snake: the head jumps to the next cell, the cells
-    behind it stay lit and fade in brightness. Big snakes step once
-    every fourth beat; small snakes step twice per beat. The square
-    size is constant along each body (the tail is never smaller than
-    the head) -- only the brightness fades."""
+    """lanes of sharp squares that tile edge-to-edge (no gaps) and light
+    up cell-by-cell in a moving snake. Each lane has its own cell size
+    and speed class:
+        small   cells -- the head steps 2 cells per beat
+        medium  cells -- the head steps 1 cell per beat
+        large   cells -- the head steps 1 cell every 2 beats
+    All lanes step on a tempo-locked clock (the song's beat period),
+    not on detected beats. The segment size is constant along each body
+    (the tail is never smaller than the head) -- only the brightness
+    fades behind the hot, near-white head."""
 
-    def __init__(self, W, H, s, fps, rng, span):
-        super().__init__(W, H, s, fps, rng, span)
-        self.NC = 26
-        self.spacing = W / (self.NC - 1)
+    # (cell-size fraction of min(W,H), speed in cells/beat, trail cells)
+    CLASSES = (
+        (0.045, 2.0, 5),   # small, fast
+        (0.070, 1.0, 6),   # medium
+        (0.100, 0.5, 7),   # large, slow
+    )
+
+    def __init__(self, W, H, s, fps, rng, span, beat_period=0.5):
+        super().__init__(W, H, s, fps, rng, span, beat_period)
+        m = min(W, H)
         self.lanes = []
-        for k in range(6):
-            big = (k % 3 == 0)  # every 3rd lane is a big, slow snake
-            if big:
-                size = 0.15 * self.spacing
-                rate = 0.25  # one cell every fourth beat
-            else:
-                size = (0.09 + 0.05 * float(rng.random())) * self.spacing
-                rate = 2.0  # two cells per beat
+        # a varied mix of the three size/speed classes
+        pattern = [0, 2, 1, 0, 1, 2]  # small, large, medium, small, medium, large
+        for k, ci in enumerate(pattern):
+            cell, speed, trail = self.CLASSES[ci]
+            cell_px = cell * m
+            ncells = max(4, int(W // cell_px))
             self.lanes.append({
-                "y": (0.12 + 0.15 * k) * H,
+                "y": (0.14 + 0.145 * k) * H,
+                "cell": cell_px,
+                "ncells": ncells,
                 "dir": 1.0 if k % 2 == 0 else -1.0,
-                "head": float(rng.random() * self.NC),
-                "rate": rate,
-                "size": size,
-                "hue": (0.52 + 0.08 * k) % 1.0,
-                "trail": 6,
+                "head": int(rng.integers(0, ncells)),
+                "acc": float(rng.random()),
+                "beats_per_step": 1.0 / speed,  # beats per one-cell step
+                "trail": trail,
+                "hue": (0.52 + 0.09 * k) % 1.0,
             })
-        self.last_beat_t = -10.0
+        self.last_t = 0.0
 
     def tick(self, i, t, env, punch, overall):
-        rows = []
-        # advance heads on each beat, by the lane's rate (in cells)
-        if punch > 0.40 and t - self.last_beat_t > 0.12:
-            self.last_beat_t = t
-            for ln in self.lanes:
-                ln["head"] += ln["rate"] * ln["dir"]
+        dt_beats = (t - self.last_t) / max(self.beat_period, 1e-3)
+        self.last_t = t
         for ln in self.lanes:
-            n = self.NC
-            head = ln["head"] % n
-            base = 0.45 + 0.4 * overall + 0.5 * punch
+            ln["acc"] += dt_beats
+            step = ln["beats_per_step"]
+            while ln["acc"] >= step:
+                ln["head"] = (ln["head"] + int(ln["dir"])) % ln["ncells"]
+                ln["acc"] -= step
+        rows = []
+        base = 0.5 + 0.35 * overall + 0.5 * punch
+        for ln in self.lanes:
+            n = ln["ncells"]
+            cell = ln["cell"]
+            head = int(ln["head"]) % n
             for j in range(ln["trail"]):
-                idx = int(round(head - j * ln["dir"])) % n
-                x = idx * self.spacing
+                idx = (head - int(j * ln["dir"])) % n
+                x = (idx + 0.5) * cell
                 fade = 1.0 - j / ln["trail"]
-                amp = base * (0.25 + 0.75 * fade)  # brightness fades, size stays
+                amp = base * (0.20 + 0.80 * fade)  # brightness fades, size stays
                 if j == 0:
                     col = hsv(ln["hue"], 0.12, 1.0)  # hot near-white head
                 else:
                     col = hsv(ln["hue"], 1.0, 1.0)
-                rows.append(box(x, ln["y"], 0.0, ln["size"], amp, col))
+                rows.append(box(x, ln["y"], 0.0, cell / 2.0, amp, col))
         return rows
 
 
@@ -1837,7 +1873,7 @@ class Director:
     crossfades between them (any scene into any scene) by blending
     their linear-light fields."""
 
-    def __init__(self, plan, W, H, s, fps, rng):
+    def __init__(self, plan, W, H, s, fps, rng, beat_period=0.5):
         self.plan = plan
         self.W, self.H, self.s, self.fps = W, H, s, fps
         self.rng = rng
@@ -1848,10 +1884,13 @@ class Director:
         self.switch_i = 0
         self.xf = max(4, int(0.55 * fps))
         self.halo_sig = min(W, H) * 0.55
+        self.beat_period = beat_period
 
     def _make(self, sp):
-        return SCENES[sp["scene"]](self.W, self.H, self.s, self.fps,
-                                   self.rng, sp)
+        sc = SCENES[sp["scene"]](self.W, self.H, self.s, self.fps,
+                                 self.rng, sp)
+        sc.beat_period = self.beat_period
+        return sc
 
     def fields(self, i, t, env, punch, overall):
         if self.cur is None:
@@ -1913,7 +1952,13 @@ def render(feats, plan, W, H, fps, writer, use_gpu, progress_cb=None,
     vig = (1.0 - 0.30 * S.clamp(vr, 0.0, 1.2) ** 2)
 
     s = min(W, H) / 720.0
-    director = Director(plan, W, H, s, fps, np.random.default_rng(20240709))
+    # tempo-locked clock: estimate the song's beat period from the beats
+    if beats:
+        beat_period = estimate_beat_period(feats, beats)
+    else:
+        beat_period = estimate_beat_period(feats, extract_beats(feats))
+    director = Director(plan, W, H, s, fps,
+                        np.random.default_rng(20240709), beat_period)
     e_state = {"bass": 0.0, "mid": 0.0, "treb": 0.0}
     punch_state = 0.0
     exposure = 1.0
