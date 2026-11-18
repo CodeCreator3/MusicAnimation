@@ -25,9 +25,11 @@ import music_viz as M
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 INPUTS = os.path.join(ROOT, "inputs")
+PROJECTS = os.path.join(ROOT, "projects")
 WEB = os.path.join(ROOT, "web")
 os.makedirs(INPUTS, exist_ok=True)
 os.makedirs(os.path.join(ROOT, "outputs"), exist_ok=True)
+os.makedirs(PROJECTS, exist_ok=True)
 
 # initialize the CUDA context on the main thread so render worker
 # threads can use the GPU
@@ -168,6 +170,45 @@ def api_replan():
     fs[-1][2] = n
     plan = M.plan_scenes(fs, fps)
     return jsonify(plan=_plan_seconds(plan, fps))
+
+
+@app.get("/api/projects")
+def api_projects():
+    names = sorted(f[:-5] for f in os.listdir(PROJECTS) if f.endswith(".json"))
+    return jsonify(names=names)
+
+
+@app.post("/api/project/save")
+def api_project_save():
+    d = request.get_json(force=True)
+    name = _safe_name(str(d.get("name", "")))
+    if not name:
+        return jsonify(error="no project name"), 400
+    path = os.path.join(PROJECTS, name + ".json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(d.get("data"), f, indent=1)
+    return jsonify(name=name)
+
+
+@app.get("/api/project/load")
+def api_project_load():
+    name = _safe_name(request.args.get("name", ""))
+    path = os.path.join(PROJECTS, name + ".json")
+    if not os.path.exists(path):
+        return jsonify(error="project not found: " + name), 404
+    with open(path, encoding="utf-8") as f:
+        return jsonify(json.load(f))
+
+
+@app.post("/api/project/delete")
+def api_project_delete():
+    d = request.get_json(force=True)
+    name = _safe_name(str(d.get("name", "")))
+    path = os.path.join(PROJECTS, name + ".json")
+    if os.path.exists(path):
+        os.remove(path)
+        return jsonify(ok=True)
+    return jsonify(error="project not found: " + name), 404
 
 
 @app.get("/api/resolve_dir")

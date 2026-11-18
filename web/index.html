@@ -132,7 +132,21 @@
   </section>
 
   <section>
-    <h2>2 &middot; Output</h2>
+    <h2>2 &middot; Project</h2>
+    <div class="row">
+      <label class="small">Name</label>
+      <input type="text" id="projName" size="18" placeholder="my_song_viz">
+      <button onclick="saveProject()">Save</button>
+      <select id="projList" style="min-width:130px"></select>
+      <button onclick="loadProjectSel()">Load</button>
+      <button onclick="deleteProjectSel()">&#10005; delete</button>
+    </div>
+    <div class="hint" style="margin-top:6px">A project stores the input, your
+      phase / timeline edits, and the output settings. Saved in projects/.</div>
+  </section>
+
+  <section>
+    <h2>3 &middot; Output</h2>
     <div class="row">
       <label class="small">Folder</label>
       <input type="text" id="outDir" value="outputs" size="28">
@@ -149,9 +163,9 @@
   </section>
 
   <section class="hidden" id="timelineSec">
-    <h2>3 &middot; Phases &amp; scenes &mdash; drag the | handles to move
-      boundaries, click a band to change its phase, play the audio and
-      tweak by ear</h2>
+    <h2>4 &middot; Phases &amp; scenes &mdash; drag the | handles to move
+      boundaries, click a band to change its phase, double-click a band to
+      add a divider, play the audio and tweak by ear</h2>
     <canvas id="tl" height="170"></canvas>
     <div style="display:flex;gap:10px;align-items:center;margin-top:4px">
       <button id="zoomReset" class="hidden" style="padding:3px 10px;font-size:12px">reset zoom</button>
@@ -174,7 +188,7 @@
   </section>
 
   <section class="hidden" id="renderSec">
-    <h2>4 &middot; Render</h2>
+    <h2>5 &middot; Render</h2>
     <div class="row">
       <button class="primary" id="renderBtn" onclick="startRender()">
         Generate video
@@ -229,6 +243,7 @@ async function api(url, opts) {
     (info.cuda ? "GPU render ready" : "CPU render") +
     (info.nvenc ? " + NVENC" : "");
   renderInputChips();
+  refreshProjectList();
   // select first input if there is one
   if (S.inputs.length) selectInput(S.inputs[0]);
 })();
@@ -265,7 +280,7 @@ function selectInput(name) {
   $("audioBox").classList.remove("hidden");
   const a = $("audioPrev");
   a.src = "/media?name=" + encodeURIComponent(name);
-  analyze();
+  return analyze();
 }
 
 // ---------- analyze + editable timeline ----------
@@ -665,6 +680,90 @@ document.addEventListener("keydown", e => {
   const ap = $("audioPrev");
   if (ap.paused) ap.play(); else ap.pause();
 });
+
+// ---------- projects (save / load phase edits + settings) ----------
+function projName() {
+  const v = $("projName").value.trim();
+  return v || (S.name ? S.name.split(".")[0] + "_viz" : "");
+}
+
+async function refreshProjectList(selectName) {
+  let names = [];
+  try { names = (await api("/api/projects")).names; } catch (e) {}
+  const sel = $("projList");
+  const prev = selectName || sel.value;
+  sel.innerHTML = names.length
+    ? names.map(n => `<option ${n === prev ? "selected" : ""}>${n}</option>`).join("")
+    : `<option value="">(none)</option>`;
+  if (selectName && names.includes(selectName)) sel.value = selectName;
+}
+
+function projectData() {
+  return {
+    name: S.name, fps: S.fps, n: S.n,
+    spans: S.spans,
+    out_dir: $("outDir").value.trim() || "outputs",
+    out_name: $("outName").value.trim(),
+    size: $("outSize").value
+  };
+}
+
+async function saveProject() {
+  const name = projName();
+  if (!name) return alert("Give the project a name (or pick an input first).");
+  if (!S.name) return alert("Pick an input first, then save.");
+  $("projName").value = name;
+  try {
+    await api("/api/project/save", {
+      method: "POST",
+      body: JSON.stringify({name: name, data: projectData()})
+    });
+    await refreshProjectList(name);
+    $("status").textContent = "saved project " + name;
+  } catch (e) { alert("save failed: " + e.message); }
+}
+
+async function loadProjectSel() {
+  const name = $("projList").value;
+  if (!name) return alert("No project selected.");
+  $("projName").value = name;
+  try {
+    const d = await api("/api/project/load?name=" + encodeURIComponent(name));
+    // restore output settings
+    $("outDir").value = d.out_dir || "outputs";
+    $("outName").value = d.out_name || "";
+    if (d.size) $("outSize").value = d.size;
+    // re-analyze the input, then apply the saved phase edits
+    if (d.name && S.inputs.includes(d.name)) {
+      await selectInput(d.name);
+    } else {
+      $("status").textContent = "input " + (d.name || "?") + " not in inputs/";
+      return;
+    }
+    if (d.spans && d.spans.length) {
+      S.spans = d.spans;
+      S.plan = await api("/api/replan", {
+        method: "POST",
+        body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
+      }).then(j => j.plan);
+      drawTimeline();
+      renderSceneChips();
+      $("status").textContent = "loaded project " + name;
+    }
+  } catch (e) { alert("load failed: " + e.message); }
+}
+
+async function deleteProjectSel() {
+  const name = $("projList").value;
+  if (!name) return alert("No project selected.");
+  if (!confirm("Delete project " + name + "?")) return;
+  try {
+    await api("/api/project/delete", {
+      method: "POST", body: JSON.stringify({name: name})
+    });
+    await refreshProjectList();
+  } catch (e) { alert("delete failed: " + e.message); }
+}
 
 // ---------- output folder picking ----------
 async function pickFolder() {
