@@ -356,6 +356,8 @@ def plan_scenes(spans, fps):
     - spans shorter than 3 s merge into the previous one
     """
     CHUNK = int(12 * fps)
+    ARC_PRE = ("build", "build_v2", "suspense", "suspense_v2")
+    ARC_REL = ("release", "release_v2")
     plan = []
     i = 0
     while i < len(spans):
@@ -366,17 +368,16 @@ def plan_scenes(spans, fps):
         # suspense), or suspense+release. It always starts at a build or
         # suspense span -- never at the phase that precedes it (intro,
         # break, ...), so that preceding phase keeps its own scene.
-        if ph in ("build", "suspense"):
+        if ph in ARC_PRE:
             arc = []
             k = i
             while k < len(spans) \
-                    and spans[k][0] in ("build", "suspense", "release"):
+                    and spans[k][0] in (ARC_PRE + ARC_REL):
                 arc.append(spans[k])
-                if spans[k][0] == "release":
+                if spans[k][0] in ARC_REL:
                     break
                 k += 1
-            if arc and arc[-1][0] == "release" \
-                    and arc[0][0] in ("build", "suspense"):
+            if arc and arc[-1][0] in ARC_REL:
                 release = arc[-1]
                 # explosion moment = release start; collapse (suspense)
                 # window = the last suspense span, or the 2 s before the
@@ -384,7 +385,7 @@ def plan_scenes(spans, fps):
                 drop = None
                 susp = None
                 for x in arc[:-1]:
-                    if x[0] == "suspense":
+                    if x[0] in ("suspense", "suspense_v2"):
                         drop = x[2]
                         susp = x[1]
                 if drop is None:
@@ -392,12 +393,15 @@ def plan_scenes(spans, fps):
                 if susp is None:
                     susp = max(arc[0][1], drop - int(2.0 * fps))
                 end = min(release[2], drop + int(10 * fps))
-                plan.append({"scene": "burst", "i0": arc[0][1], "i1": end,
+                # v1 arc -> the exploding burst; v2 arc -> the charging laser
+                scene = "charge" if release[0] == "release_v2" else "burst"
+                tail = "sustain" if release[0] == "release" else "sustain_v2"
+                plan.append({"scene": scene, "i0": arc[0][1], "i1": end,
                              "drop": drop, "susp": susp,
                              "phase": "+".join(x[0] for x in arc)})
                 if end < release[2]:
                     plan.append({"scene": None, "i0": end, "i1": release[2],
-                                 "drop": None, "phase": "sustain"})
+                                 "drop": None, "phase": tail})
                 i = k + 1
                 continue
         plan.append({"scene": None, "i0": a, "i1": b, "drop": None, "phase": ph})
@@ -406,7 +410,8 @@ def plan_scenes(spans, fps):
     # chunk long spans; the tail of a long release becomes sustain
     split = []
     for sp in plan:
-        if sp["scene"] != "burst" and sp["i1"] - sp["i0"] > CHUNK:
+        if sp["scene"] not in ("burst", "charge") \
+                and sp["i1"] - sp["i0"] > CHUNK:
             c = sp["i0"]
             first = True
             while c < sp["i1"]:
@@ -414,6 +419,8 @@ def plan_scenes(spans, fps):
                 s2 = dict(sp)
                 if not first and sp["phase"] == "release":
                     s2["phase"] = "sustain"
+                elif not first and sp["phase"] == "release_v2":
+                    s2["phase"] = "sustain_v2"
                 s2["i0"], s2["i1"] = c, d
                 split.append(s2)
                 first = False
@@ -422,28 +429,42 @@ def plan_scenes(spans, fps):
             split.append(sp)
     plan = split
 
-    cycles = {"release": ["lasers", "poly"],
-              "suspense": ["burst", "poly"],
-              "sustain": ["orbs", "grid"],
-              "break": ["grid", "stars"]}
-    counters = {"release": 0, "suspense": 0, "sustain": 0, "break": 0}
+    # v1 and v2 phases each have their own scene pool; v2 uses a
+    # completely different set of animations (snake, charge, bombs,
+    # fractal, vortex). A fixed scene (string) is always kept; a pool
+    # (list) cycles for variety.
+    pools = {
+        "release": ["lasers", "poly"],
+        "release_v2": ["charge", "vortex"],
+        "suspense": ["burst", "poly"],
+        "suspense_v2": ["charge", "vortex"],
+        "sustain": ["orbs", "grid"],
+        "sustain_v2": ["snake", "vortex"],
+        "break": ["grid", "stars"],
+        "break_v2": ["bombs", "snake"],
+        "build": ["poly", "bombs"],
+        "build_v2": ["fractal", "vortex"],
+        "intro": "stars",
+        "outro": "poly",
+    }
+    counters = {ph: 0 for ph in pools}
     for sp in plan:
         ph = sp["phase"]
-        if sp["scene"] == "burst":
+        if sp["scene"] in ("burst", "charge"):
             continue
-        if ph == "intro":
-            sp["scene"] = "stars"
-        elif ph == "outro":
-            sp["scene"] = "poly"
-        elif ph == "build":
-            sp["scene"] = "poly"
-        else:
-            sp["scene"] = cycles[ph][counters[ph] % len(cycles[ph])]
+        pool = pools.get(ph)
+        if pool is None:
+            continue
+        if isinstance(pool, list):
+            sp["scene"] = pool[counters[ph] % len(pool)]
             counters[ph] += 1
+        else:
+            sp["scene"] = pool
 
     fin = []
     for sp in plan:
-        if fin and sp["i1"] - sp["i0"] < int(3 * fps) and sp["scene"] != "burst":
+        if fin and sp["i1"] - sp["i0"] < int(3 * fps) \
+                and sp["scene"] not in ("burst", "charge"):
             fin[-1]["i1"] = sp["i1"]
         else:
             fin.append(sp)
@@ -1201,11 +1222,15 @@ class StarsScene(Scene):
         self.hue0 = 0.52 + 0.22 * rng.random(self.N)
         self.R = 0.72 * min(W, H)
         self.limit = self.diag * 0.8
+        self.t0 = span["i0"] / fps
 
     def tick(self, i, t, env, punch, overall):
         rows = []
         cx, cy = self.drift(t)
-        dz = 0.0035 + 0.016 * overall + 0.030 * punch
+        local = max(0.0, t - self.t0)
+        rot = 0.55 * local            # spin grows as the intro progresses
+        dz = (0.0035 + 0.016 * overall + 0.030 * punch) \
+            * (1.0 + 0.8 * min(1.0, local / 12.0))  # zoom speeds up
         z = self.z
         for n in range(self.N):
             zn = z[n] - dz * self.sf[n]
@@ -1216,7 +1241,7 @@ class StarsScene(Scene):
             r = self.R * (1.0 - zn) / zn * 0.055
             if r > self.limit:
                 continue
-            th = self.th[n]
+            th = self.th[n] + rot
             x = cx + r * math.cos(th)
             y = cy + r * math.sin(th)
             b = 1.0 - zn
@@ -1296,6 +1321,322 @@ class PolyScene(Scene):
         return rows
 
 
+class SnakeScene(Scene):
+    """lanes of sharp squares that light up in sequence and travel across
+    the screen, trailing off behind the head (a moving snake)."""
+
+    def __init__(self, W, H, s, fps, rng, span):
+        super().__init__(W, H, s, fps, rng, span)
+        self.lanes = []
+        nl = 5
+        for k in range(nl):
+            ncells = 22
+            spacing = W / (ncells - 1)
+            self.lanes.append({
+                "y": (0.16 + 0.17 * k) * H, "ncells": ncells,
+                "spacing": spacing,
+                "speed": (4.0 + 3.0 * float(rng.random()))
+                          * (1.0 if k % 2 == 0 else -1.0),
+                "off": float(rng.random() * ncells),
+                "hue": (0.52 + 0.09 * k) % 1.0, "trail": 7,
+                "size": 0.30 * spacing * (1.0 - 0.04 * k),
+            })
+
+    def tick(self, i, t, env, punch, overall):
+        rows = []
+        speed_mul = (0.6 + 0.6 * overall) * (1.0 + 0.8 * punch)
+        for ln in self.lanes:
+            n = ln["ncells"]
+            head = (ln["off"] + t * ln["speed"] * speed_mul) % n
+            for j in range(ln["trail"]):
+                idx = (int(head) - j) % n
+                x = idx * ln["spacing"]
+                fade = (1.0 - j / ln["trail"]) ** 1.6
+                if j == 0:  # the head: hot, near-white
+                    col = hsv(ln["hue"], 0.12, 1.0)
+                    amp = (1.5 + 1.3 * punch) * (0.7 + 0.5 * overall)
+                    half = ln["size"] * (1.0 + 0.4 * punch)
+                else:
+                    col = hsv(ln["hue"], 1.0, 1.0)
+                    amp = (0.3 + 1.2 * overall + 0.9 * punch) * fade
+                    half = ln["size"] * (0.9 + 0.2 * fade)
+                rows.append(box(x, ln["y"], 0.0, half, amp, col))
+            if punch > 0.5:
+                hx = (int(head)) * ln["spacing"]
+                rows.append(ring(hx, ln["y"], 14 * punch * self.s, 6 * self.s,
+                                 0.8 * punch, hsv(ln["hue"], 0.1, 1.0)))
+        return rows
+
+
+class ChargeScene(Scene):
+    """the v2 drop: a laser that charges up through the build/suspense and
+    fires at the release. The beam focuses to white-hot, then erupts into a
+    full-screen fire with traveling pulses and shockwaves."""
+
+    def __init__(self, W, H, s, fps, rng, span):
+        super().__init__(W, H, s, fps, rng, span)
+        drop = span.get("drop") or span["i1"]
+        susp = span.get("susp") or (drop - int(2.0 * fps))
+        self.t0 = span["i0"] / fps
+        self.t_susp = susp / fps
+        self.t_exp = drop / fps
+        self.angle = float(rng.uniform(0.0, math.pi))
+        self.hue = float(rng.uniform(0.52, 0.62))
+        self.R = 0.5 * min(W, H)
+        self.last_fire = 0.0
+
+    def tick(self, i, t, env, punch, overall):
+        rows = []
+        cx, cy = self.drift(t)
+        R = 0.95 * self.diag
+        ang = self.angle + 0.08 * math.sin(t * 0.5)
+        dx, dy = math.cos(ang), math.sin(ang)
+        x1, y1 = cx - R * dx, cy - R * dy
+        x2, y2 = cx + R * dx, cy + R * dy
+        dur = max(self.t_exp - self.t0, 1e-3)
+        if t < self.t_exp:
+            # ---- charging: the beam focuses, energy tightens in ----
+            Q = min(max((t - self.t0) / dur, 0.0), 1.0)
+            focus = Q * Q * (3.0 - 2.0 * Q)
+            jitter = (1.0 - focus) * 4.0 * self.s * math.sin(t * 42.0)
+            gx, gy = x2 - jitter * dy, y2 + jitter * dx
+            rows.append(line(x1, y1, gx, gy, (26 - 20 * focus) * self.s,
+                             0.30 + 1.4 * Q, hsv(self.hue, 1.0, 1.0)))
+            rows.append(line(x1, y1, gx, gy, 2.0 * self.s, 0.6 * Q,
+                             hsv(self.hue, 0.2, 1.0)))
+            # a ring of energy focusing toward the beam
+            Np = 44
+            for n in range(Np):
+                a = n * (2 * math.pi / Np) + t * 0.7
+                rr = self.R * (1.0 - 0.9 * focus) * (0.5 + 0.5 * ((n * 0.61) % 1.0))
+                px, py = cx + rr * math.cos(a), cy + rr * math.sin(a)
+                rows.append(point(px, py, (2.0 + 3.0 * focus) * self.s,
+                                  0.4 + 1.3 * focus, hsv(self.hue,
+                                                         1.0 - 0.7 * focus, 1.0)))
+            # the capacitor: a swelling white-hot node at the center
+            rows.append(point(cx, cy, (8 + 26 * focus) * self.s,
+                              0.4 + 1.8 * focus * focus, hsv(self.hue, 0.1, 1.0)))
+        else:
+            # ---- fired: full beam, white-hot, pulses and shockwaves ----
+            tau = t - self.t_exp
+            flash = math.exp(-tau * 7.0)
+            bass = min(1.6, float(env["bass"]))
+            rows.append(line(x1, y1, x2, y2, (8 + 50 * flash) * self.s,
+                             0.8 + 4.0 * flash + 0.7 * bass,
+                             hsv(self.hue, 1.0, 1.0)))
+            rows.append(line(x1, y1, x2, y2, (1.5 + 8 * flash) * self.s,
+                             1.5 + 6.0 * flash + 1.1 * bass,
+                             hsv(self.hue, 0.1, 1.0)))
+            # traveling pulses along the beam
+            for k in range(2):
+                pp = (tau * (1.3 + 0.5 * k)) % 1.0
+                rows.append(point(x1 + (x2 - x1) * pp, y1 + (y2 - y1) * pp,
+                                  (6 + 8 * flash) * self.s, 1.0 + 3.0 * flash,
+                                  hsv(self.hue, 0.1, 1.0)))
+            # the moment of fire
+            if flash > 0.01:
+                rows.append(point(cx, cy, (30 + 300 * tau) * self.s, 6.0 * flash,
+                                  hsv(0.9, 0.4, 1.0)))
+                rows.append(point(cx, cy, (15 + 150 * tau) * self.s, 9.0 * flash,
+                                  hsv(0.0, 0.05, 1.0)))
+            if tau < 1.3:
+                f2 = 1.0 - tau / 1.3
+                rows.append(ring(cx, cy, 1400 * self.s * tau, 16 * self.s,
+                                 2.5 * f2, hsv(0.95, 1.0, 1.0)))
+                rows.append(ring(cx, cy, 900 * self.s * tau, 10 * self.s,
+                                 1.6 * f2, hsv(self.hue, 1.0, 1.0)))
+            # re-fires on each hard punch
+            if punch > 0.4 and tau - self.last_fire > 0.18:
+                self.last_fire = tau
+                rows.append(ring(cx, cy, 260 * punch * self.s, 12 * self.s,
+                                 1.6 * punch, hsv(0.0, 0.1, 1.0)))
+                rows.append(point(cx, cy, (20 + 120 * punch) * self.s,
+                                  2.5 * punch, hsv(self.hue, 0.1, 1.0)))
+        return rows
+
+
+class BombsScene(Scene):
+    """little bombs are thrown across the screen and burst into spiral
+    explosions of light."""
+
+    def __init__(self, W, H, s, fps, rng, span):
+        super().__init__(W, H, s, fps, rng, span)
+        self.bombs = []
+        self.expl = []
+        self.last_launch = -10.0
+
+    def _launch(self, t):
+        W, H = self.W, self.H
+        r = self.rng
+        side = int(r.integers(0, 4))
+        if side == 0: x0, y0 = float(r.random()) * W, -30.0
+        elif side == 1: x0, y0 = W + 30.0, float(r.random()) * H
+        elif side == 2: x0, y0 = float(r.random()) * W, H + 30.0
+        else: x0, y0 = -30.0, float(r.random()) * H
+        self.bombs.append({
+            "x0": x0, "y0": y0,
+            "x1": float(r.uniform(0.18, 0.82)) * W,
+            "y1": float(r.uniform(0.18, 0.82)) * H,
+            "t0": t, "dur": float(r.uniform(0.5, 1.1)),
+            "hue": float(r.random())})
+
+    def tick(self, i, t, env, punch, overall):
+        rows = []
+        if (punch > 0.45 and t - self.last_launch > 0.12) or \
+                (len(self.bombs) < 2 and t - self.last_launch > 0.5):
+            self._launch(t)
+            self.last_launch = t
+        alive = []
+        for b in self.bombs:
+            p = (t - b["t0"]) / b["dur"]
+            if p >= 1.0:
+                self.expl.append({"cx": b["x1"], "cy": b["y1"], "t0": t,
+                                  "hue": b["hue"],
+                                  "spin": float(self.rng.uniform(3.0, 7.0))
+                                           * (1.0 if self.rng.random() < 0.5 else -1.0),
+                                  "R": min(self.W, self.H)
+                                       * float(self.rng.uniform(0.18, 0.4))})
+                continue
+            x = b["x0"] + (b["x1"] - b["x0"]) * p
+            y = b["y0"] + (b["y1"] - b["y0"]) * p - 120 * math.sin(p * math.pi)
+            amp = 0.6 + 0.5 * overall
+            rows.append(point(x, y, 4 * self.s, amp, hsv(b["hue"], 0.2, 1.0)))
+            rows.append(point(x, y, 10 * self.s, 0.4 * amp,
+                              hsv(b["hue"], 1.0, 1.0)))
+            rows.append(point(x, y - 4 * self.s, 3 * self.s, 0.8 * amp,
+                              hsv(0.08, 0.4, 1.0)))
+            alive.append(b)
+        self.bombs = alive
+        life = 0.9
+        alive_e = []
+        for e in self.expl:
+            age = t - e["t0"]
+            if age > life:
+                continue
+            f = 1.0 - age / life
+            Rexp = e["R"] * (0.3 + 0.7 * (age / life))
+            arms, per = 3, 10
+            for a in range(arms):
+                for j in range(per):
+                    rr = Rexp * ((j + 1) / per) ** 1.4
+                    ang = a * (2 * math.pi / arms) + (j / per) * 2.2 \
+                          + age * e["spin"]
+                    x = e["cx"] + rr * math.cos(ang)
+                    y = e["cy"] + rr * math.sin(ang)
+                    if -20 < x < self.W + 20 and -20 < y < self.H + 20:
+                        hue = (e["hue"] + j * 0.01 + age * 0.1) % 1.0
+                        rows.append(point(x, y, (2.0 + 4.0 * f) * self.s,
+                                          0.3 + 1.4 * f,
+                                          hsv(hue, 1.0 - 0.6 * f, 1.0)))
+            if age < 0.25:
+                cf = 1.0 - age / 0.25
+                rows.append(point(e["cx"], e["cy"],
+                                  (10 + 40 * (1 - cf)) * self.s, 3.0 * cf,
+                                  hsv(0.0, 0.05, 1.0)))
+            alive_e.append(e)
+        self.expl = alive_e
+        return rows
+
+
+class FractalScene(Scene):
+    """a recursive fractal tree that grows out from its base, with smaller
+    satellite fractals growing around the edges."""
+
+    def __init__(self, W, H, s, fps, rng, span):
+        super().__init__(W, H, s, fps, rng, span)
+        self.t0 = span["i0"] / fps
+        self.sway = float(rng.uniform(0.0, 6.28))
+
+    def _tree(self, rows, x, y, angle, length, depth, g, hue, spread, ratio,
+              maxd):
+        if depth > maxd or length < 5.0 or g < depth * 0.10:
+            return
+        ex = x + length * math.cos(angle)
+        ey = y + length * math.sin(angle)
+        lw = max(1.5, length * 0.10)
+        lvl = min(1.0, depth / 6.0)
+        rows.append(line(x, y, ex, ey, lw, 0.4 + 0.7 * (1.0 - lvl),
+                         hsv(hue, 1.0, 1.0)))
+        rows.append(line(x, y, ex, ey, lw * 0.35, 0.4 + 0.6 * (1.0 - lvl),
+                         hsv(hue, 0.15, 1.0)))
+        nl = length * ratio
+        self._tree(rows, ex, ey, angle - spread, nl, depth + 1, g,
+                   (hue + 0.04) % 1.0, spread, ratio, maxd)
+        self._tree(rows, ex, ey, angle + spread, nl, depth + 1, g,
+                   (hue + 0.09) % 1.0, spread, ratio, maxd)
+
+    def tick(self, i, t, env, punch, overall):
+        rows = []
+        W, H = self.W, self.H
+        local = max(0.0, t - self.t0)
+        grow = min(1.0, 0.35 + 0.65 * (local / 4.0))
+        g = min(1.0, max(0.2,
+                         grow * (0.85 + 0.12 * math.sin(t * 0.7))
+                         + 0.15 * punch))
+        sway = self.sway + 0.15 * math.sin(t * 0.6)
+        hue0 = (0.30 + 0.04 * local) % 1.0
+        # main tree growing up from the bottom
+        self._tree(rows, W / 2, H * 0.92, -math.pi / 2 + sway * 0.1,
+                   0.28 * H, 0, g, hue0, 0.45, 0.72, 6)
+        # satellites around the edges
+        for (sx, sy, ang, hue) in (
+                (0.13 * W, 0.30 * H, 0.1, (hue0 + 0.30) % 1.0),
+                (0.87 * W, 0.30 * H, math.pi - 0.1, (hue0 + 0.55) % 1.0),
+                (0.50 * W, 0.16 * H, math.pi / 2, (hue0 + 0.80) % 1.0)):
+            self._tree(rows, sx, sy, ang + sway * 0.2, 0.15 * H, 0,
+                       min(1.0, g * 1.15), hue, 0.55, 0.70, 4)
+        rows.append(point(W / 2, H * 0.92, (10 + 10 * overall) * self.s,
+                          0.5 + 0.6 * punch, hsv(hue0, 0.2, 1.0)))
+        return rows
+
+
+class VortexScene(Scene):
+    """a spinning galaxy vortex: dense spiral arms of points rotate and
+    tighten on the beat around a hot core."""
+
+    def __init__(self, W, H, s, fps, rng, span):
+        super().__init__(W, H, s, fps, rng, span)
+        self.N = 220
+        self.arms = 3
+        self.arm = np.floor(rng.random(self.N) * self.arms).astype(int)
+        self.dist = rng.power(0.6, self.N)
+        self.tw = rng.normal(0.0, 0.15, self.N)
+        self.ph = rng.random(self.N)
+        self.R = 0.46 * min(W, H)
+        self.hue0 = float(rng.uniform(0.5, 0.7))
+
+    def tick(self, i, t, env, punch, overall):
+        rows = []
+        cx, cy = self.drift(t)
+        rot = t * (0.5 + 1.6 * overall + 2.0 * punch)
+        tighten = 1.0 - 0.35 * min(1.0, overall + 0.5 * punch)
+        R = self.R * tighten
+        for n in range(self.N):
+            d = self.dist[n]
+            r = R * d
+            th = (self.arm[n] * (2 * math.pi / self.arms)
+                  + d * 3.2 + self.tw[n] + rot * (1.0 - 0.4 * d))
+            x = cx + r * math.cos(th)
+            y = cy + r * math.sin(th)
+            inner = 1.0 - d
+            hue = (self.hue0 + 0.25 * d + 0.02 * t) % 1.0
+            amp = (0.25 + 1.1 * inner * inner) * (0.6 + 0.9 * overall
+                                                  + 0.6 * punch)
+            sz = (1.6 + 3.0 * inner) * self.s
+            col = hsv(hue, 0.05, 1.0) if self.ph[n] < 0.12 \
+                else hsv(hue, 1.0, 1.0)
+            rows.append(point(x, y, sz, amp, col))
+        rows.append(point(cx, cy, (18 + 22 * overall) * self.s,
+                          0.6 + 1.4 * punch, hsv(self.hue0, 1.0, 1.0)))
+        rows.append(point(cx, cy, (9 + 10 * overall) * self.s,
+                          1.0 + 2.0 * punch, hsv(self.hue0, 0.1, 1.0)))
+        if punch > 0.45:
+            rows.append(ring(cx, cy, R * (0.4 + 0.6 * punch), 8 * self.s,
+                             1.2 * punch, hsv((self.hue0 + 0.3) % 1.0,
+                                               1.0, 1.0)))
+        return rows
+
+
 SCENES = {
     "orbs": OrbsScene,
     "lasers": LasersScene,
@@ -1303,6 +1644,11 @@ SCENES = {
     "grid": GridScene,
     "stars": StarsScene,
     "poly": PolyScene,
+    "snake": SnakeScene,
+    "charge": ChargeScene,
+    "bombs": BombsScene,
+    "fractal": FractalScene,
+    "vortex": VortexScene,
 }
 
 
