@@ -57,18 +57,44 @@
   canvas { display: block; width: 100%; }
   #tl { height: 170px; }
   #tl2 { height: 90px; }
-  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  .chip {
-    border-radius: 6px; padding: 4px 10px; font-size: 12px;
-    border: 1px solid var(--line); background: var(--panel2);
+  .scenebar {
+    display: flex; align-items: stretch; margin-top: 10px;
+    border: 1px solid var(--line); border-radius: 8px;
+    overflow: hidden; position: relative; height: 40px;
   }
-  .chip b { color: #fff; }
-  .chip .sc { color: var(--accent2); }
-  #phaseRow { display: flex; margin-top: 6px; }
-  #phaseRow select {
-    flex: 1 1 0; min-width: 34px; font-size: 12px; padding: 4px 2px;
-    text-align: center; border-radius: 4px;
+  .scenebar-seg {
+    flex: 1 1 0; min-width: 0; display: flex; align-items: center;
+    justify-content: center; border-right: 1px solid rgba(0,0,0,.35);
+    cursor: default;
   }
+  .scenebar-seg:last-child { border-right: none; }
+  .scenebar-seg span {
+    font-size: 12px; color: #fff; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; padding: 0 6px;
+    text-shadow: 0 1px 2px rgba(0,0,0,.6);
+  }
+  .scenebar-drop {
+    position: absolute; top: 0; bottom: 0; width: 0;
+    border-left: 2px dashed #fff; pointer-events: auto;
+  }
+  .info {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 17px; height: 17px; margin-left: 8px; border-radius: 50%;
+    border: 1px solid var(--line); color: var(--dim); font-size: 11px;
+    font-style: italic; font-family: Georgia, serif; cursor: help;
+    position: relative; vertical-align: middle;
+  }
+  .info:hover { color: var(--accent2); border-color: var(--accent2); }
+  .info .tip {
+    display: none; position: absolute; top: 22px; left: -6px;
+    width: 300px; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    font-size: 12px; font-style: normal; line-height: 1.5;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 60; white-space: normal;
+    text-align: left;
+  }
+  .info:hover .tip { display: block; }
+  .info .tip b { color: var(--accent2); font-weight: 600; }
   #phaseMenu {
     position: fixed; z-index: 50;
     background: var(--panel2); border: 1px solid var(--line);
@@ -163,15 +189,25 @@
   </section>
 
   <section class="hidden" id="timelineSec">
-    <h2>4 &middot; Phases &amp; scenes &mdash; drag the | handles to move
-      boundaries, click a band to change its phase, double-click a band to
-      add a divider, play the audio and tweak by ear</h2>
+    <h2>4 &middot; Phases &amp; scenes
+      <span class="info">i
+        <span class="tip">
+          <b>Controls</b><br>
+          &bull; drag the <b>| handles</b> to move boundaries<br>
+          &bull; <b>click a band</b> to change its phase<br>
+          &bull; <b>double-click a band</b> to add a divider<br>
+          &bull; <b>space</b> = play / pause the audio preview<br>
+          &bull; <b>wheel</b> = zoom &middot; <b>shift+wheel / right-drag / alt+drag</b> = pan<br>
+          &bull; <b>hold + drag on the curve</b> = scrub the playhead<br>
+          &bull; hover the bar below for a segment's timing<br>
+          Tweak by ear as you play.
+        </span>
+      </span>
+    </h2>
     <canvas id="tl" height="170"></canvas>
     <div style="display:flex;gap:10px;align-items:center;margin-top:4px">
       <button id="zoomReset" class="hidden" style="padding:3px 10px;font-size:12px">reset zoom</button>
       <span id="zoomInfo" class="hint"></span>
-      <span class="hint">wheel = zoom &middot; shift+wheel / alt+drag = pan &middot;
-        click band = change phase &middot; double-click band = add divider</span>
     </div>
     <div id="phaseMenu" class="hidden"></div>
     <div class="legend">
@@ -182,8 +218,9 @@
       <span><i style="background:#22c55e"></i>sustain</span>
       <span><i style="background:#38bdf8"></i>break</span>
       <span><i style="background:#64748b"></i>outro</span>
+      <span class="hint" style="margin-left:6px">_v2 = the second, different set of animations</span>
     </div>
-    <div class="chips" id="sceneChips"></div>
+    <div id="sceneBar"></div>
     <div id="status"></div>
   </section>
 
@@ -211,14 +248,19 @@
 </div>
 
 <script>
-const PHASES = ["intro","build","suspense","release","sustain","break","outro"];
+const PHASES = ["intro","build","suspense","release","sustain","break","outro",
+                "build_v2","suspense_v2","release_v2","sustain_v2","break_v2"];
 const PHASE_COL = {
   intro:"#7a5cff", build:"#ff9800", suspense:"#ffc400",
-  release:"#ff2d95", sustain:"#22c55e", break:"#38bdf8", outro:"#64748b"
+  release:"#ff2d95", sustain:"#22c55e", break:"#38bdf8", outro:"#64748b",
+  build_v2:"#d65cff", suspense_v2:"#7c4dff", release_v2:"#ff3d3d",
+  sustain_v2:"#19d3a5", break_v2:"#ff8a3d"
 };
 const SCENE_COL = {
   orbs:"#ff2d95", lasers:"#00e5ff", burst:"#ff5e3a",
-  grid:"#22c55e", stars:"#c084fc", poly:"#facc15"
+  grid:"#22c55e", stars:"#c084fc", poly:"#facc15",
+  snake:"#19d3a5", charge:"#ff3d3d", bombs:"#ff8a3d",
+  fractal:"#d65cff", vortex:"#7c4dff"
 };
 const S = {
   inputs: [], name: null, fps: 30, dur: 0, n: 0,
@@ -384,19 +426,41 @@ document.addEventListener("pointerdown", e => {
   closePhaseMenu();
 });
 
-function renderSceneChips() {
-  const box = $("sceneChips");
+function renderSceneBar() {
+  const box = $("sceneBar");
   box.innerHTML = "";
+  if (!S.plan.length) return;
+  const bar = document.createElement("div");
+  bar.className = "scenebar";
   for (const sp of S.plan) {
-    const c = document.createElement("span");
-    c.className = "chip";
-    c.style.borderColor = SCENE_COL[sp.scene] || "#666";
-    c.innerHTML =
-      `<b>${fmtT(sp.s0)}-${fmtT(sp.s1)}</b> ` +
-      `${sp.phase} &rarr; <span class="sc">${sp.scene}</span>` +
-      (sp.drop ? ` <b style="color:#fff">&#9679;</b>` : "");
-    box.appendChild(c);
+    const seg = document.createElement("div");
+    seg.className = "scenebar-seg";
+    seg.style.flex = Math.max(0.5, sp.s1 - sp.s0);
+    seg.style.background = (SCENE_COL[sp.scene] || "#666") + "2e";
+    seg.style.borderColor = SCENE_COL[sp.scene] || "#666";
+    const label = document.createElement("span");
+    label.textContent = sp.scene;
+    seg.appendChild(label);
+    seg.title = sp.s0.toFixed(1) + "-" + sp.s1.toFixed(1) + "s  " +
+      sp.phase + " \u2192 " + sp.scene;
+    bar.appendChild(seg);
   }
+  // drop markers (the explosion moment of each burst/charge)
+  for (const sp of S.plan) {
+    if (sp.drop !== null && sp.drop !== undefined && S.dur > 0) {
+      const m = document.createElement("div");
+      m.className = "scenebar-drop";
+      m.style.left = (sp.drop / S.dur * 100) + "%";
+      m.title = "drop at " + sp.drop.toFixed(1) + "s";
+      bar.appendChild(m);
+    }
+  }
+  box.appendChild(bar);
+}
+
+function renderSceneChips() {
+  // kept as an alias so old call-sites keep working
+  renderSceneBar();
 }
 
 function fmtT(t) {
