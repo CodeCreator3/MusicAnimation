@@ -1446,40 +1446,41 @@ class PolyScene(Scene):
 
 
 class SnakeScene(Scene):
-    """lanes of sharp squares that tile edge-to-edge (no gaps) and light
-    up cell-by-cell in a moving snake. Each lane has its own cell size
-    and speed class:
-        small   cells -- the head steps 2 cells per beat
-        medium  cells -- the head steps 1 cell per beat
-        large   cells -- the head steps 1 cell every 2 beats
-    All lanes step on a tempo-locked clock (the song's beat period),
-    not on detected beats. The segment size is constant along each body
-    (the tail is never smaller than the head) -- only the brightness
-    fades behind the hot, near-white head."""
+    """lanes of crisp, bright neon squares that tile edge-to-edge and
+    light up cell-by-cell in a moving snake. Every square is the SAME
+    size on every lane; the three lanes only differ in speed class:
+        small   -- the head steps 2 cells per beat
+        medium  -- the head steps 1 cell per beat
+        large   -- the head steps 1 cell every 2 beats
+    Each square is a solid bright box with a soft glow halo around it,
+    slightly inset so adjacent squares meet at a thin glowing seam
+    instead of overlapping. All lanes step on a tempo-locked clock
+    (the song's beat period), not on detected beats. Brightness fades
+    behind the hot near-white head (never to transparent)."""
 
-    # (cell-size fraction of min(W,H), speed in cells/beat, trail cells)
+    # uniform square edge as a fraction of min(W, H); the three classes
+    # differ only in speed (cells stepped per beat) and trail length:
+    #   (speed in cells/beat, trail cells)
+    CELL = 0.060
     CLASSES = (
-        (0.045, 2.0, 5),   # small, fast
-        (0.070, 1.0, 6),   # medium
-        (0.100, 0.5, 7),   # large, slow
+        (2.0, 5),   # small, fast
+        (1.0, 6),   # medium
+        (0.5, 7),   # large, slow
     )
 
     def __init__(self, W, H, s, fps, rng, span, beat_period=0.5):
         super().__init__(W, H, s, fps, rng, span, beat_period)
         m = min(W, H)
-        self.lanes = []
-        # a varied mix of the three size/speed classes
+        self.ncells = max(4, int(round(W / (self.CELL * m))))
+        self.cell = W / self.ncells  # exact edge-to-edge tiling
         pattern = [0, 2, 1, 0, 1, 2]  # small, large, medium, small, medium, large
+        self.lanes = []
         for k, ci in enumerate(pattern):
-            cell, speed, trail = self.CLASSES[ci]
-            cell_px = cell * m
-            ncells = max(4, int(W // cell_px))
+            speed, trail = self.CLASSES[ci]
             self.lanes.append({
                 "y": (0.14 + 0.145 * k) * H,
-                "cell": cell_px,
-                "ncells": ncells,
                 "dir": 1.0 if k % 2 == 0 else -1.0,
-                "head": int(rng.integers(0, ncells)),
+                "head": int(rng.integers(0, self.ncells)),
                 "acc": float(rng.random()),
                 "beats_per_step": 1.0 / speed,  # beats per one-cell step
                 "trail": trail,
@@ -1494,24 +1495,29 @@ class SnakeScene(Scene):
             ln["acc"] += dt_beats
             step = ln["beats_per_step"]
             while ln["acc"] >= step:
-                ln["head"] = (ln["head"] + int(ln["dir"])) % ln["ncells"]
+                ln["head"] = (ln["head"] + int(ln["dir"])) % self.ncells
                 ln["acc"] -= step
         rows = []
-        base = 0.5 + 0.35 * overall + 0.5 * punch
+        cell = self.cell
+        half_core = cell * 0.40    # inset so a thin glowing seam remains
+        glow_sig = cell * 0.85     # soft halo around each square
+        bright = 3.0 * (0.55 + 0.45 * min(1.5, overall + 0.5 * punch))
         for ln in self.lanes:
-            n = ln["ncells"]
-            cell = ln["cell"]
+            n = self.ncells
             head = int(ln["head"]) % n
             for j in range(ln["trail"]):
                 idx = (head - int(j * ln["dir"])) % n
                 x = (idx + 0.5) * cell
-                fade = 1.0 - j / ln["trail"]
-                amp = base * (0.20 + 0.80 * fade)  # brightness fades, size stays
+                fade = 0.45 + 0.55 * (1.0 - j / ln["trail"])  # never transparent
                 if j == 0:
-                    col = hsv(ln["hue"], 0.12, 1.0)  # hot near-white head
+                    col = hsv(ln["hue"], 0.15, 1.0)  # hot near-white head
+                    amp = bright * 1.25
                 else:
                     col = hsv(ln["hue"], 1.0, 1.0)
-                rows.append(box(x, ln["y"], 0.0, cell / 2.0, amp, col))
+                    amp = bright * fade
+                # crisp bright square + a soft neon glow halo around it
+                rows.append(box(x, ln["y"], 0.0, half_core, amp, col))
+                rows.append(point(x, ln["y"], glow_sig, amp * 0.5, col))
         return rows
 
 
