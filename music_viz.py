@@ -22,8 +22,10 @@ Structure:
         orbs   - the classic glowing orbs + core + beat rings
         lasers - rotating lightsaber beams (bright near-white core with
                  crisp edges, soft colored glow) + scanline shots
-        burst  - particles spiral in during a build/suspense, then
-                 explode exactly when the release hits
+        burst  - the full drop arc: particles spiral in and brighten
+                 through the build, collapse to a white-hot point at
+                 max tension in the suspense, then explode on the
+                 release and settle into a pulsing aftermath
         grid   - drone show: 160 small sharp-edged squares with spring
                  physics; on every major beat the swarm forms a new
                  shape (circle, star, square, diamond, wave wall,
@@ -179,8 +181,9 @@ def segment_phases(feats, fps):
          - loud sections that just continue loud ones -> sustain
          - quiet / low-punch mid dips in the middle -> break
          - a quiet tail at the end -> outro
-      4. Carve a "suspense" window out of the last ~2 s of whatever
-         span sits right before each release.
+      4. Before each release, carve a "suspense" window (last ~2 s)
+         and, out of quiet breaks / intros, a "build" window (~4.5 s),
+         so every drop has build -> suspense -> release.
     """
     n = feats["n"]
     punch = feats["punch"]
@@ -306,29 +309,38 @@ def segment_phases(feats, fps):
         merged[1][1] = merged[0][1]
         del merged[0]
 
-    # carve a "suspense" window (last ~2 s) out of the span right
-    # before each release
+    # before each release, carve a "suspense" window (last ~2 s) and,
+    # out of quiet breaks / intros, a "build" window (~4.5 s), so
+    # every drop has build -> suspense -> release
     final = []
     SUS = int(2.0 * fps)
+    BLD = int(4.5 * fps)
     for k, sp in enumerate(merged):
         nxt = merged[k + 1] if k + 1 < len(merged) else None
-        if nxt and nxt[0] == "release" and sp[0] != "release" \
-                and sp[2] - sp[1] > SUS + int(0.8 * fps):
-            a = sp[2] - SUS
-            final.append([sp[0], sp[1], a])
-            final.append(["suspense", a, sp[2]])
-        else:
+        if not (nxt and nxt[0] == "release" and sp[0] != "release"
+                and sp[2] - sp[1] > SUS + int(0.8 * fps)):
             final.append(sp)
+            continue
+        susp = sp[2] - SUS
+        if sp[0] in ("break", "intro") and susp - sp[1] > BLD + int(1.0 * fps):
+            bld = susp - BLD
+            final.append([sp[0], sp[1], bld])
+            final.append(["build", bld, susp])
+        else:
+            final.append([sp[0], sp[1], susp])
+        final.append(["suspense", susp, sp[2]])
     return final
 
 
 def plan_scenes(spans, fps):
     """Turn phase spans into a scene plan.
 
-    - a build (or suspense) followed directly by a release becomes one
-      "burst" span (the scene converges during the build and explodes
-      exactly when the release hits); the burst covers up to 10 s of
-      the release, the rest of a long release becomes sustain
+    - a drop arc -- build -> suspense -> release, with either or both
+      of the first two present -- becomes one "burst" span. The scene
+      brightens and tightens through the build, collapses at max
+      tension in the suspense, and detonates exactly when the release
+      hits; the burst covers up to 10 s of the release, the rest of a
+      long release becomes sustain
     - spans longer than 12 s are chunked so scenes vary
     - each phase cycles through its scene list for variety
     - spans shorter than 3 s merge into the previous one
@@ -338,16 +350,40 @@ def plan_scenes(spans, fps):
     i = 0
     while i < len(spans):
         ph, a, b = spans[i]
-        if ph in ("build", "suspense") and i + 1 < len(spans) \
-                and spans[i + 1][0] == "release" and spans[i + 1][1] == b:
-            rel_end = spans[i + 1][2]
-            end = min(rel_end, b + int(10 * fps))
-            plan.append({"scene": "burst", "i0": a, "i1": end,
-                         "drop": b, "phase": ph + "+release"})
-            if end < rel_end:
-                plan.append({"scene": None, "i0": end, "i1": rel_end,
+        # does a drop arc start here?
+        arc = [spans[i]]
+        j = i + 1
+        while j < len(spans) and len(arc) < 3 \
+                and arc[-1][2] == spans[j][1] \
+                and spans[j][0] in ("build", "suspense", "release"):
+            if spans[j][0] == "release" and len(arc) >= 2:
+                arc.append(spans[j])
+                break
+            arc.append(spans[j])
+            j += 1
+        if len(arc) >= 2 and arc[-1][0] == "release" \
+                and any(x[0] in ("build", "suspense") for x in arc[:-1]):
+            release = arc[-1]
+            # the explosion moment: the release start, or the suspense
+            # end (they coincide). Prefer suspense end if present.
+            drop = None
+            susp = None
+            for x in arc[:-1]:
+                if x[0] == "suspense":
+                    drop = x[2]
+                    susp = x[1]
+            if drop is None:
+                drop = release[1]
+            if susp is None:
+                susp = max(arc[0][1], drop - int(2.0 * fps))
+            end = min(release[2], drop + int(10 * fps))
+            plan.append({"scene": "burst", "i0": arc[0][1], "i1": end,
+                         "drop": drop, "susp": susp,
+                         "phase": "+".join(x[0] for x in arc)})
+            if end < release[2]:
+                plan.append({"scene": None, "i0": end, "i1": release[2],
                              "drop": None, "phase": "sustain"})
-            i += 2
+            i = j + 1
             continue
         plan.append({"scene": None, "i0": a, "i1": b, "drop": None, "phase": ph})
         i += 1
@@ -825,46 +861,83 @@ class LasersScene(Scene):
 
 
 class BurstScene(Scene):
-    """build then explode: particles spiral in, detonate at the drop"""
+    """the full drop arc: build -> suspense -> release.
+
+    build:    particles spiral in from off-screen, brightness and ring
+              activity rise, the core swells -- tension accumulates
+    suspense: everything collapses into one small white-hot point at
+              maximum tension, with a held flicker and a final ring
+              closing in on it
+    release:  white flash, three shockwave rings, debris; then the
+              aftermath settles into a bass-driven pulsing core that
+              feeds into the next scene (the burst span covers up to
+              10 s of the release)
+    """
 
     def __init__(self, W, H, s, fps, rng, span):
         super().__init__(W, H, s, fps, rng, span)
         self.t0 = span["i0"] / fps
+        self.t_susp = span.get("susp", span["drop"] / fps - 2.0) / fps
         self.t_exp = span["drop"] / fps
-        self.N = 110
-        self.R = 0.46 * min(W, H)
+        self.N = 130
+        self.R = 0.50 * min(W, H)
         self.th = rng.uniform(0.0, 2 * math.pi, self.N)
-        self.r0 = self.R * (0.30 + 0.70 * rng.random(self.N) ** 0.6)
-        self.v = self.R * (1.6 + 2.6 * rng.random(self.N))
-        self.hue_b = (0.50 + 0.14 * rng.random(self.N)) % 1.0
+        # start far outside the screen and spiral in during the build
+        self.r0 = self.R * (1.4 + 1.2 * rng.random(self.N))
+        self.swirl = rng.uniform(1.0, 2.2, self.N) * \
+            rng.choice(np.array([-1.0, 1.0]), self.N)
+        self.v = self.R * (1.8 + 2.8 * rng.random(self.N))
+        self.hue_b = (0.50 + 0.16 * rng.random(self.N)) % 1.0
         self.hue_e = (0.95 + 0.18 * rng.random(self.N)) % 1.0
 
     def tick(self, i, t, env, punch, overall):
         rows = []
         cx, cy = self.drift(t)
         if t < self.t_exp:
-            dur = max(self.t_exp - self.t0, 1e-3)
-            p = min(max((t - self.t0) / dur, 0.0), 1.0)
-            pe = p * p * (3.0 - 2.0 * p)
-            r = self.r0 * (1.0 - 0.85 * pe)
-            th = self.th + 2.5 * pe
+            # ---- build + suspense: spiral in, then collapse ----
+            bt = max(self.t_susp - self.t0, 1e-3)
+            et = max(self.t_exp - self.t_susp, 1e-3)
+            b = min(max((t - self.t0) / bt, 0.0), 1.0)   # build progress
+            c = min(max((t - self.t_susp) / et, 0.0), 1.0)  # collapse
+            b2 = b * b * (3.0 - 2.0 * b)
+            c2 = c * c
+            # radius: spiral from r0 to 0.35*R, then collapse to a point
+            r = self.r0 * (1.0 - 0.65 * b2) * (1.0 - 0.985 * c2)
+            th = self.th + self.swirl * (1.8 * b + 5.5 * c2)
             x = cx + r * np.cos(th)
             y = cy + r * np.sin(th)
-            amp = 0.30 + 1.05 * pe + 0.25 * overall
-            sig = (3.0 + 7.0 * pe) * self.s
+            # brightness rises with tension; held flicker at the peak
+            flick = 1.0 + 0.12 * c2 * math.sin(t * 46.0)
+            amp = (0.35 + 1.15 * b2 + 0.55 * overall) * flick
+            sig = (2.5 + 5.0 * b2 + 7.0 * c2) * self.s
+            # hue converges toward white as it collapses
+            sat = 1.0 - 0.80 * c2
             for n in range(self.N):
+                hue = (self.hue_b[n] + 0.04 * t) % 1.0
                 rows.append(point(float(x[n]), float(y[n]), sig, amp,
-                                  hsv(self.hue_b[n], 1.0, 1.0)))
-            rr1 = self.R * (1.0 - (t * 0.35) % 1.0)
-            rr2 = self.R * (1.0 - ((t * 0.35) + 0.5) % 1.0)
-            rows.append(ring(cx, cy, rr1, 5 * self.s, 0.55, hsv(0.55, 1.0, 1.0)))
-            rows.append(ring(cx, cy, rr2, 5 * self.s, 0.40, hsv(0.60, 1.0, 1.0)))
-            hue_c = (0.50 + 0.38 * pe) % 1.0
-            rows.append(point(cx, cy, (12 + 75 * pe) * self.s,
-                              0.4 + 1.9 * pe * pe, hsv(hue_c, 1.0, 1.0)))
-            rows.append(point(cx, cy, (6 + 28 * pe) * self.s,
-                              0.8 + 2.6 * pe * pe, hsv(hue_c, 0.10, 1.0)))
+                                  hsv(hue, sat, 1.0)))
+            # converging rings: outward pulses speed up in the build,
+            # then a final ring snaps shut during the collapse
+            if c < 0.999:
+                rr = self.R * (1.0 - 0.98 * c2)
+                rows.append(ring(cx, cy, rr, (4.0 + 5.0 * c2) * self.s,
+                                 0.35 + 1.3 * c2, hsv(0.60, 1.0, 1.0)))
+            spd = 0.5 + 2.2 * b2
+            ph = (t * spd) % 1.0
+            rows.append(ring(cx, cy, self.R * (1.0 - ph), 4 * self.s,
+                             (0.25 + 0.9 * b2) * (0.4 + 0.6 * ph),
+                             hsv(0.55, 1.0, 1.0)))
+            # core swells, then becomes a white-hot point at max tension
+            core_sig = (10 + 70 * b2 + 26 * c2) * self.s
+            core_amp = (0.4 + 1.8 * b2 + 3.2 * c2) * flick
+            hue_c = (0.50 + 0.40 * b2) % 1.0
+            rows.append(point(cx, cy, core_sig, core_amp,
+                              hsv(hue_c, 1.0 - 0.7 * c2, 1.0)))
+            rows.append(point(cx, cy, core_sig * 0.4,
+                              core_amp * 1.2, hsv(hue_c, 1.0 - 0.85 * c2,
+                                                  1.0)))
         else:
+            # ---- release: flash, shockwaves, debris, then aftermath ----
             tau = t - self.t_exp
             fade = max(0.0, 1.0 - tau / 0.85)
             r = 0.10 * self.R + self.v * tau
@@ -879,10 +952,10 @@ class BurstScene(Scene):
                                   hsv(self.hue_e[n], 1.0, 1.0)))
             fl = math.exp(-tau * 7.0)
             if fl > 0.01:
-                rows.append(point(cx, cy, (40 + 460 * tau) * self.s, 8.0 * fl,
-                                  hsv(0.90, 0.45, 1.0)))
-                rows.append(point(cx, cy, (16 + 200 * tau) * self.s, 12.0 * fl,
-                                  hsv(0.0, 0.08, 1.0)))
+                rows.append(point(cx, cy, (40 + 460 * tau) * self.s,
+                                  8.0 * fl, hsv(0.90, 0.45, 1.0)))
+                rows.append(point(cx, cy, (16 + 200 * tau) * self.s,
+                                  12.0 * fl, hsv(0.0, 0.08, 1.0)))
             if tau < 1.3:
                 f2 = 1.0 - tau / 1.3
                 rows.append(ring(cx, cy, 1500 * self.s * tau, 18 * self.s,
@@ -891,11 +964,17 @@ class BurstScene(Scene):
                                  1.8 * f2, hsv(0.52, 1.0, 1.0)))
                 rows.append(ring(cx, cy, 1900 * self.s * tau, 8 * self.s,
                                  1.2 * f2, hsv(0.12, 1.0, 1.0)))
+            # aftermath: a bass-driven pulsing core that settles into
+            # the sustain (the burst span runs up to 10 s past the hit)
+            bass = min(1.6, float(env["bass"]))
+            settle = min(1.0, tau / 2.0)
             hue_c = (0.90 + 0.04 * t) % 1.0
-            rows.append(point(cx, cy, (16 + 42 * env["bass"]) * self.s,
-                              0.35 + 1.1 * env["bass"], hsv(hue_c, 1.0, 1.0)))
-            rows.append(point(cx, cy, (8 + 18 * env["bass"]) * self.s,
-                              0.6 + 1.4 * env["bass"], hsv(hue_c, 0.10, 1.0)))
+            rows.append(point(cx, cy, (16 + 42 * bass) * self.s,
+                              (0.35 + 1.1 * bass) * (0.6 + 0.4 * settle),
+                              hsv(hue_c, 1.0, 1.0)))
+            rows.append(point(cx, cy, (8 + 18 * bass) * self.s,
+                              (0.6 + 1.4 * bass) * (0.5 + 0.5 * settle),
+                              hsv(hue_c, 0.10, 1.0)))
         return rows
 
 

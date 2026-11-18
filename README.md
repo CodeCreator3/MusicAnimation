@@ -23,7 +23,7 @@ Turns an audio file into an MP4 with a glowing, beat-driven animation.
    |--------|------|
    | `orbs`   | the classic: 10 neon orbs on Lissajous orbits (magenta bass, cyan mids, yellow-green treble), a spectrum-cycling core, expanding beat rings |
    | `lasers` | six rotating lightsaber beams: a bright near-white core with crisp edges over a soft colored glow, plus full-screen scanline shots on hard punches |
-   | `burst`  | 110 particles spiral in as the build rises, then detonate at the drop: white flash, three shockwave rings, debris |
+   | `burst`  | the full drop arc: build (particles spiral in, brightening), suspense (everything collapses to a white-hot point at max tension), release (white flash + three shockwave rings + debris), then a pulsing aftermath that feeds into the sustain |
    | `grid`   | drone show: 160 small, sharp-edged squares with spring physics; on every major beat the swarm forms a new shape (circle, star, square, diamond, wave wall, flower) and the physics simulation itself runs faster on the beat |
    | `stars`  | a warp-tunnel starfield that streaks on punch |
    | `poly`   | nested rotating neon polygons (triangle, square, pentagon, hexagon) that kick on the beat |
@@ -36,12 +36,14 @@ Turns an audio file into an MP4 with a glowing, beat-driven animation.
 6. Raw RGB frames are piped to FFmpeg, which encodes H.264 + the
    original audio into an MP4.
 
-Phase -> scene mapping: intro -> stars, build -> poly, suspense ->
-burst / poly, release -> lasers / poly (cycled), sustain -> orbs / grid
-(cycled), break -> grid / stars (cycled), outro -> poly. A build or
-suspense that flows straight into a release becomes one burst whose
-explosion lands on the release. Long stretches are chunked at 12 s so
-scenes keep varying.
+Phase -> scene mapping: intro -> stars, build/suspense that flows
+straight into a release -> one burst spanning the whole arc (the
+explosion lands on the release), a lone suspense -> burst / poly,
+release -> lasers / poly (cycled), sustain -> orbs / grid (cycled),
+break -> grid / stars (cycled), outro -> poly. The segmenter carves a
+build (from quiet breaks / intros) and a suspense (last ~2 s) before
+each release, so every drop has all three phases. Long stretches are
+chunked at 12 s so scenes keep varying.
 
 ## Setup
 
