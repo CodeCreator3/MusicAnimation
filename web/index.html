@@ -367,7 +367,7 @@ function canvasCtx(cv) {
   return {ctx, w: w, h: h};
 }
 
-const T1 = {drag: -1, pan: null, v0: 0, v1: 1};
+const T1 = {drag: -1, pan: null, scrub: false, v0: 0, v1: 1};
 
 function viewSet(v0, v1) {
   const MIN = 1.5;
@@ -502,8 +502,8 @@ $("tl").addEventListener("pointerdown", e => {
   const py = e.clientY - rect.top;
   const w = rect.width;
   closePhaseMenu();
-  // alt+drag: pan the view
-  if (e.altKey) {
+  // right-drag or alt+drag: pan the view
+  if (e.button === 2 || e.altKey) {
     T1.pan = {px: px, v0: T1.v0, v1: T1.v1};
     e.target.setPointerCapture(e.pointerId);
     return;
@@ -531,12 +531,25 @@ $("tl").addEventListener("pointerdown", e => {
     }
     return;
   }
-  // clicked in the curve region: seek the audio preview
+  // clicked in the curve region: seek, and keep scrubbing while held
   const ap = $("audioPrev");
   if (ap.duration) ap.currentTime = Math.max(0, Math.min(t, S.dur - 0.05));
+  T1.scrub = true;
+  e.target.setPointerCapture(e.pointerId);
 });
 
+// right-click is used for panning, not the context menu
+$("tl").addEventListener("contextmenu", e => e.preventDefault());
+
 $("tl").addEventListener("pointermove", e => {
+  if (T1.scrub && (e.buttons & 1)) {
+    const rect = e.target.getBoundingClientRect();
+    const t = viewT(rect.width, e.clientX - rect.left);
+    const ap2 = $("audioPrev");
+    if (ap2.duration) ap2.currentTime = Math.max(0, Math.min(t, S.dur - 0.05));
+    drawTimeline();
+    return;
+  }
   if (T1.pan) {
     const rect = e.target.getBoundingClientRect();
     const px = e.clientX - rect.left;
@@ -558,8 +571,13 @@ $("tl").addEventListener("pointermove", e => {
   drawTimeline();
 });
 
+$("tl").addEventListener("pointercancel", () => {
+  T1.pan = null; T1.scrub = false; T1.drag = -1;
+});
+
 $("tl").addEventListener("pointerup", async e => {
   if (T1.pan) { T1.pan = null; return; }
+  if (T1.scrub) { T1.scrub = false; return; }
   if (T1.drag < 0) return;
   T1.drag = -1;
   try {
