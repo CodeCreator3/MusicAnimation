@@ -682,13 +682,11 @@ function drawTimeline() {
       const x = X(b[0]);
       if (x < -10 || x > w + 10) continue;
       const y = beatY(b[1]);
+      // draggable marker circle sitting on the existing beat tick
       ctx.beginPath();
       ctx.arc(x, y, 6, 0, 6.283);
       ctx.fillStyle = "#00e5ff"; ctx.fill();
       ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
-      // strength stem
-      ctx.strokeStyle = "rgba(0,229,255,.4)"; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, TL.curveTop + TL.curveH); ctx.stroke();
     }
   }
 
