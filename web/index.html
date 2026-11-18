@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music Animation</title>
+<style>
+  :root {
+    --bg: #0a0a0f; --panel: #12121a; --panel2: #191926;
+    --text: #e8e8f0; --dim: #8888a0; --line: #2a2a3d;
+    --accent: #ff2d95; --accent2: #00e5ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 20px; margin: 6px 0 2px; font-weight: 600; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--dim); margin-bottom: 18px; }
+  section {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+  }
+  section h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--dim); margin: 0 0 10px;
+  }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 14px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { border-color: var(--accent2); }
+  button.primary {
+    background: linear-gradient(90deg, #ff2d95, #9027ff);
+    border: none; color: #fff; font-weight: 600; padding: 9px 20px;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=text], select {
+    background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 10px; font-size: 13px;
+  }
+  input[type=text]:focus, select:focus { outline: none; border-color: var(--accent2); }
+  label.small { color: var(--dim); font-size: 12px; }
+  .file-chip {
+    background: var(--panel2); border: 1px solid var(--line);
+    padding: 5px 12px; border-radius: 16px; cursor: pointer; font-size: 13px;
+  }
+  .file-chip.active { border-color: var(--accent); color: #fff; }
+  .hint { color: var(--dim); font-size: 12px; }
+  .hidden { display: none; }
+  audio { width: 100%; margin-top: 10px; }
+  canvas { display: block; width: 100%; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .chip {
+    border-radius: 6px; padding: 4px 10px; font-size: 12px;
+    border: 1px solid var(--line); background: var(--panel2);
+  }
+  .chip b { color: #fff; }
+  .chip .sc { color: var(--accent2); }
+  #phaseRow { display: flex; margin-top: 6px; }
+  #phaseRow select {
+    width: 100%; font-size: 12px; padding: 4px 2px; text-align: center;
+    border-radius: 4px;
+  }
+  .progress-outer {
+    height: 10px; background: var(--panel2); border-radius: 5px;
+    overflow: hidden; margin-top: 8px;
+  }
+  .progress-inner {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #ff2d95, #9027ff, #00e5ff);
+    transition: width .2s;
+  }
+  video { width: 100%; border-radius: 8px; background: #000; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+  .legend span { font-size: 12px; color: var(--dim); }
+  .legend i {
+    display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    margin-right: 4px;
+  }
+  #status { font-size: 12px; color: var(--dim); margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Music <span>Animation</span></h1>
+  <div class="sub">audio in &rarr; beat-driven neon scenes out &middot;
+    <span id="gpuBadge" class="hint">checking GPU...</span>
+  </div>
+
+  <section>
+    <h2>1 &middot; Input</h2>
+    <div class="row">
+      <button onclick="filePick.click()">Choose MP3...</button>
+      <input type="file" id="filePick" accept="audio/*,.mp3" class="hidden">
+      <span id="inputChips" class="row"></span>
+    </div>
+    <div id="audioBox" class="hidden">
+      <audio id="audioPrev" controls preload="metadata"></audio>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 &middot; Output</h2>
+    <div class="row">
+      <label class="small">Folder</label>
+      <input type="text" id="outDir" value="outputs" size="28">
+      <button onclick="pickFolder()">Browse...</button>
+      <label class="small">File name</label>
+      <input type="text" id="outName" size="28" placeholder="(default: &lt;input&gt;_viz.mp4)">
+      <label class="small">Size</label>
+      <select id="outSize">
+        <option value="1280x720">1280x720</option>
+        <option value="1920x1080">1920x1080</option>
+        <option value="2560x1440">2560x1440</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="hidden" id="timelineSec">
+    <h2>3 &middot; Phases &amp; scenes &mdash; drag the | handles,
+      play the audio, tweak by ear</h2>
+    <canvas id="tl" height="170"></canvas>
+    <div id="phaseRow"></div>
+    <div class="legend">
+      <span><i style="background:#7a5cff"></i>intro</span>
+      <span><i style="background:#ff9800"></i>build</span>
+      <span><i style="background:#ff2d95"></i>drop</span>
+      <span><i style="background:#22c55e"></i>sustain</span>
+      <span><i style="background:#38bdf8"></i>break</span>
+      <span><i style="background:#64748b"></i>outro</span>
+    </div>
+    <div class="chips" id="sceneChips"></div>
+    <div id="status"></div>
+  </section>
+
+  <section class="hidden" id="renderSec">
+    <h2>4 &middot; Render</h2>
+    <div class="row">
+      <button class="primary" id="renderBtn" onclick="startRender()">
+        Generate video
+      </button>
+      <span id="renderStatus" class="hint"></span>
+    </div>
+    <div class="progress-outer hidden" id="progOuter">
+      <div class="progress-inner" id="progInner"></div>
+    </div>
+
+    <div id="resultBox" class="hidden">
+      <video id="resultVid" controls preload="metadata"></video>
+      <canvas id="tl2" height="90" style="margin-top:10px"></canvas>
+      <div class="row" style="margin-top:8px">
+        <a id="dlLink" style="color:var(--accent2)">Download video</a>
+        <span class="hint" id="resultInfo"></span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+const PHASES = ["intro","build","drop","sustain","break","outro"];
+const PHASE_COL = {
+  intro:"#7a5cff", build:"#ff9800", drop:"#ff2d95",
+  sustain:"#22c55e", break:"#38bdf8", outro:"#64748b"
+};
+const SCENE_COL = {
+  orbs:"#ff2d95", lasers:"#00e5ff", burst:"#ff5e3a",
+  grid:"#22c55e", stars:"#c084fc", poly:"#facc15"
+};
+const S = {
+  inputs: [], name: null, fps: 30, dur: 0, n: 0,
+  energy: [], punch: [], spans: [], plan: [],
+  job: null, result: null
+};
+
+const $ = id => document.getElementById(id);
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+// ---------- boot ----------
+(async function boot() {
+  const info = await api("/api/info");
+  S.inputs = info.inputs;
+  $("gpuBadge").textContent =
+    (info.cuda ? "GPU render ready" : "CPU render") +
+    (info.nvenc ? " + NVENC" : "");
+  renderInputChips();
+  // select first input if there is one
+  if (S.inputs.length) selectInput(S.inputs[0]);
+})();
+
+function renderInputChips() {
+  const box = $("inputChips");
+  box.innerHTML = "";
+  for (const n of S.inputs) {
+    const c = document.createElement("span");
+    c.className = "file-chip" + (n === S.name ? " active" : "");
+    c.textContent = n;
+    c.onclick = () => selectInput(n);
+    box.appendChild(c);
+  }
+}
+
+$("filePick").onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("file", f);
+  try {
+    const j = await api("/api/upload", {method:"POST", body: fd});
+    S.inputs.push(j.name);
+    renderInputChips();
+    selectInput(j.name);
+  } catch (err) { alert("Upload failed: " + err.message); }
+  e.target.value = "";
+};
+
+function selectInput(name) {
+  S.name = name;
+  renderInputChips();
+  $("audioBox").classList.remove("hidden");
+  const a = $("audioPrev");
+  a.src = "/media?name=" + encodeURIComponent(name);
+  analyze();
+}
+
+// ---------- analyze + editable timeline ----------
+async function analyze() {
+  if (!S.name) return;
+  $("status").textContent = "analyzing " + S.name + " ...";
+  try {
+    const j = await api("/api/analyze?name=" + encodeURIComponent(S.name));
+    Object.assign(S, {
+      fps: j.fps, n: j.n, dur: j.dur,
+      energy: j.energy, punch: j.punch,
+      spans: j.spans, plan: j.plan
+    });
+    $("timelineSec").classList.remove("hidden");
+    $("renderSec").classList.remove("hidden");
+    $("resultBox").classList.add("hidden");
+    buildPhaseRow();
+    drawTimeline();
+    renderSceneChips();
+    $("status").textContent = "";
+  } catch (err) {
+    $("status").textContent = "analysis failed: " + err.message;
+  }
+}
+
+function buildPhaseRow() {
+  const row = $("phaseRow");
+  row.innerHTML = "";
+  S.spans.forEach((sp, i) => {
+    const sel = document.createElement("select");
+    sel.innerHTML = PHASES.map(p =>
+      `<option ${p === sp[0] ? "selected" : ""}>${p}</option>`).join("");
+    sel.style.flex = Math.max(1, sp[2] - sp[1]);
+    sel.onchange = async () => {
+      S.spans[i][0] = sel.value;
+      S.plan = await api("/api/replan", {
+        method: "POST",
+        body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
+      }).then(j => j.plan);
+      renderSceneChips();
+    };
+    row.appendChild(sel);
+  });
+}
+
+function renderSceneChips() {
+  const box = $("sceneChips");
+  box.innerHTML = "";
+  for (const sp of S.plan) {
+    const c = document.createElement("span");
+    c.className = "chip";
+    c.style.borderColor = SCENE_COL[sp.scene] || "#666";
+    c.innerHTML =
+      `<b>${fmtT(sp.s0)}-${fmtT(sp.s1)}</b> ` +
+      `${sp.phase} &rarr; <span class="sc">${sp.scene}</span>` +
+      (sp.drop ? ` <b style="color:#fff">&#9679;</b>` : "");
+    box.appendChild(c);
+  }
+}
+
+function fmtT(t) {
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
+}
+
+// ---------- timeline canvas ----------
+function canvasCtx(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = cv.clientWidth * dpr;
+  cv.height = parseInt(cv.getAttribute("height")) * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+  return {ctx, w: cv.clientWidth, h: parseInt(cv.getAttribute("height"))};
+}
+
+const T1 = {drag: -1};
+
+function drawTimeline() {
+  const {ctx, w, h} = canvasCtx($("tl"));
+  ctx.clearRect(0, 0, w, h);
+  const t0 = 0, t1v = S.dur;
+  const X = t => (t - t0) / (t1v - t0) * (w - 8) + 4;
+  const curveTop = 8, curveH = 92;
+
+  // energy area
+  ctx.beginPath();
+  ctx.moveTo(X(0), curveTop + curveH);
+  const emax = Math.max(...S.energy, 0.001);
+  S.energy.forEach((v, i) => {
+    const t = i / (S.energy.length - 1) * S.dur;
+    ctx.lineTo(X(t), curveTop + curveH - v / emax * curveH);
+  });
+  ctx.lineTo(X(S.dur), curveTop + curveH);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(0, curveTop, 0, curveTop + curveH);
+  g.addColorStop(0, "rgba(255,45,149,.55)");
+  g.addColorStop(1, "rgba(255,45,149,.06)");
+  ctx.fillStyle = g; ctx.fill();
+
+  // punch ticks
+  ctx.strokeStyle = "rgba(0,229,255,.8)"; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const pmax = Math.max(...S.punch, 0.001);
+  S.punch.forEach((v, i) => {
+    const t = i / (S.punch.length - 1) * S.dur;
+    if (v > 0.15 * pmax) {
+      const y0 = curveTop + curveH;
+      ctx.moveTo(X(t), y0);
+      ctx.lineTo(X(t), y0 - v / pmax * 26);
+    }
+  });
+  ctx.stroke();
+
+  // phase bands
+  const bandY = 116, bandH = 34;
+  for (const sp of S.spans) {
+    const a = X(sp[1]), b = X(sp[2]);
+    ctx.fillStyle = (PHASE_COL[sp[0]] || "#555") + "55";
+    ctx.fillRect(a, bandY, b - a, bandH);
+    ctx.strokeStyle = PHASE_COL[sp[0]] || "#555";
+    ctx.strokeRect(a + .5, bandY + .5, b - a - 1, bandH - 1);
+    ctx.fillStyle = "#fff"; ctx.font = "11px Segoe UI";
+    const mid = (a + b) / 2;
+    if (b - a > 34) ctx.fillText(sp[0], mid - 14, bandY + 21);
+  }
+  // playhead
+  const ap = $("audioPrev");
+  if (ap.duration) {
+    const px = X(ap.currentTime);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+  }
+  // drag handles (boundaries)
+  for (let i = 0; i < S.spans.length - 1; i++) {
+    const px = X(S.spans[i][2]);
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.moveTo(px - 6, 4); ctx.lineTo(px + 6, 4); ctx.lineTo(px, 14);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.beginPath(); ctx.moveTo(px, 4); ctx.lineTo(px, h); ctx.stroke();
+  }
+}
+
+// pointer interaction on the timeline
+$("tl").addEventListener("pointerdown", e => {
+  const rect = e.target.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const w = rect.width;
+  let best = -1, bd = 1e9;
+  for (let i = 0; i < S.spans.length - 1; i++) {
+    const bx = S.spans[i][2] / S.dur * (w - 8) + 4;
+    const d = Math.abs(bx - px);
+    if (d < bd) { bd = d; best = i; }
+  }
+  if (bd > 10) {
+    // click in the curve area: seek the audio preview
+    const t = (px - 4) / (w - 8) * S.dur;
+    const ap = $("audioPrev");
+    if (ap.duration) ap.currentTime = Math.max(0, Math.min(t, S.dur - 0.05));
+    return;
+  }
+  T1.drag = best;
+  e.target.setPointerCapture(e.pointerId);
+});
+
+$("tl").addEventListener("pointermove", e => {
+  if (T1.drag < 0) return;
+  const rect = e.target.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const w = rect.width;
+  let t = (px - 4) / (w - 8) * S.dur;
+  const i = T1.drag;
+  t = Math.max(S.spans[i][1] + 0.5, Math.min(t, S.spans[i + 1][2] - 0.5));
+  S.spans[i][2] = t;
+  S.spans[i + 1][1] = t;
+  buildPhaseRow();
+  drawTimeline();
+});
+
+$("tl").addEventListener("pointerup", async e => {
+  if (T1.drag < 0) return;
+  T1.drag = -1;
+  try {
+    S.plan = await api("/api/replan", {
+      method: "POST",
+      body: JSON.stringify({fps: S.fps, n: S.n, spans: S.spans})
+    }).then(j => j.plan);
+    renderSceneChips();
+  } catch (err) { $("status").textContent = err.message; }
+});
+
+$("audioPrev").addEventListener("timeupdate", () => drawTimeline());
+
+// ---------- output folder picking ----------
+async function pickFolder() {
+  try {
+    if (window.showDirectoryPicker) {
+      const dir = await window.showDirectoryPicker();
+      const j = await api("/api/resolve_dir?name=" +
+                          encodeURIComponent(dir.name));
+      $("outDir").value = j.path;
+      return;
+    }
+    throw new Error("no picker");
+  } catch (err) {
+    // fall back: ask for a path
+    const p = prompt("Type the absolute path of the output folder:",
+                     $("outDir").value);
+    if (p) $("outDir").value = p;
+  }
+}
+
+// ---------- render ----------
+async function startRender() {
+  if (!S.name) return alert("Choose an input first.");
+  $("renderBtn").disabled = true;
+  $("resultBox").classList.add("hidden");
+  $("progOuter").classList.remove("hidden");
+  $("progInner").style.width = "0%";
+  $("renderStatus").textContent = "rendering...";
+  const outName = $("outName").value.trim() ||
+    (S.name.split(".")[0] + "_viz.mp4");
+  try {
+    const j = await api("/api/render", {
+      method: "POST",
+      body: JSON.stringify({
+        name: S.name,
+        out_dir: $("outDir").value.trim() || "outputs",
+        out_name: outName,
+        size: $("outSize").value,
+        fps: S.fps,
+        spans: S.spans
+      })
+    });
+    S.job = j.job;
+    pollJob();
+  } catch (err) {
+    $("renderStatus").textContent = "failed: " + err.message;
+    $("renderBtn").disabled = false;
+  }
+}
+
+async function pollJob() {
+  const j = await api("/api/status?job=" + S.job);
+  if (j.state === "running") {
+    $("progInner").style.width = (j.progress * 100).toFixed(1) + "%";
+    $("renderStatus").textContent =
+      "rendering... " + (j.progress * 100).toFixed(0) + "%";
+    setTimeout(pollJob, 700);
+  } else if (j.state === "done") {
+    $("progInner").style.width = "100%";
+    $("renderStatus").textContent = "done";
+    $("renderBtn").disabled = false;
+    showResult(j.out);
+  } else {
+    $("renderStatus").textContent = "error: " + j.error;
+    $("renderBtn").disabled = false;
+  }
+}
+
+function showResult(path) {
+  S.result = path;
+  const box = $("resultBox");
+  box.classList.remove("hidden");
+  const v = $("resultVid");
+  v.src = "/video?path=" + encodeURIComponent(path);
+  $("dlLink").href = "/video?path=" + encodeURIComponent(path);
+  $("dlLink").setAttribute("download", path.split(/[\\/]/).pop());
+  $("resultInfo").textContent = path;
+  drawResultTimeline();
+}
+
+// ---------- result timeline (synced) ----------
+function drawResultTimeline() {
+  const {ctx, w, h} = canvasCtx($("tl2"));
+  ctx.clearRect(0, 0, w, h);
+  const X = t => t / S.dur * (w - 8) + 4;
+  const bandY = 10, bandH = 52;
+  for (const sp of S.plan) {
+    const a = X(sp.s0), b = X(sp.s1);
+    ctx.fillStyle = (SCENE_COL[sp.scene] || "#555") + "44";
+    ctx.fillRect(a, bandY, b - a, bandH);
+    ctx.strokeStyle = SCENE_COL[sp.scene] || "#555";
+    ctx.strokeRect(a + .5, bandY + .5, b - a - 1, bandH - 1);
+    ctx.fillStyle = "#fff"; ctx.font = "11px Segoe UI";
+    if (b - a > 40) {
+      ctx.fillText(sp.scene, (a + b) / 2 - 16, bandY + 20);
+      ctx.fillStyle = "#bbb";
+      ctx.fillText(fmtT(sp.s0), a + 4, bandY + 38);
+    }
+    if (sp.drop !== null) {  // drop marker
+      const px = X(sp.drop);
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.moveTo(px, bandY + bandH);
+      ctx.lineTo(px - 5, bandY + bandH + 9);
+      ctx.lineTo(px + 5, bandY + bandH + 9);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  const v = $("resultVid");
+  if (v.currentTime) {
+    const px = X(v.currentTime);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+  }
+}
+
+$("resultVid").addEventListener("timeupdate", () => {
+  if (S.result) drawResultTimeline();
+});
+$("tl2").addEventListener("click", e => {
+  const rect = e.target.getBoundingClientRect();
+  const t = (e.clientX - rect.left - 4) / (rect.width - 8) * S.dur;
+  const v = $("resultVid");
+  if (v.duration) v.currentTime = Math.max(0, Math.min(t, S.dur - 0.1));
+});
+window.addEventListener("resize", () => {
+  if (S.dur) drawTimeline();
+  if (S.result) drawResultTimeline();
+});
+</script>
+</body>
+</html>

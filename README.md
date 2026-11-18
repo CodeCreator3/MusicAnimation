@@ -53,7 +53,21 @@ FFmpeg ships inside imageio-ffmpeg, so no system install is needed.
 The GPU path needs a torch CUDA build and an NVIDIA GPU; without
 either it falls back to the CPU render automatically.
 
-## Usage
+## Web UI
+
+```
+python webui.py        # then open http://127.0.0.1:8737
+```
+
+- choose or upload an input mp3 (uploads land in `inputs/`)
+- play the audio and tweak the detected phases by ear: drag the
+  boundary handles on the timeline and change phase labels with the
+  dropdowns; the scene plan updates live
+- pick the output folder, file name, and resolution, then generate
+- the result plays on the page with scene markers, a synced playhead,
+  and a download link
+
+## Usage (command line)
 
 ```
 .venv\Scripts\python music_viz.py inputs\song.mp3
@@ -102,7 +116,10 @@ see which phase maps to which scene. To tune the segmentation, edit
 ## Files
 
 - `music_viz.py` - the main program (segmentation, director, 6 scenes,
-  GPU + CPU field renderers)
+  GPU + CPU field renderers, and the `render_video()` API used by the CLI
+  and the web UI)
+- `webui.py` - the local web server (Flask) behind the UI
+- `web/index.html` - the web UI (single self-contained page)
 - `make_test_track.py` - generates `inputs/test_track.mp3` (15 s of
   synthetic kick + pad + noise for testing)
 - `inputs/` - audio files (mp3, wav, m4a, ...)

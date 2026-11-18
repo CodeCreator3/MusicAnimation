@@ -1096,7 +1096,7 @@ class Director:
 
 # ------------------------- render loop -------------------------
 
-def render(feats, plan, W, H, fps, writer, use_gpu):
+def render(feats, plan, W, H, fps, writer, use_gpu, progress_cb=None):
     if use_gpu:
         S = _torch_shim(_cuda_dev())
     else:
@@ -1138,12 +1138,96 @@ def render(feats, plan, W, H, fps, writer, use_gpu):
         S.sync()
         if i % done == 0:
             print(f"  frame {i + 1}/{n}")
+            if progress_cb:
+                progress_cb(i, n)
     print(f"  frame {n}/{n}")
+    if progress_cb:
+        progress_cb(n, n)
 
 
 def _cuda_dev():
     import torch
     return torch.device("cuda")
+
+
+def cuda_available():
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+def render_video(audio, out, W=1280, H=720, fps=30, adelay=40,
+                 use_gpu=False, use_nvenc=False, phase_spans=None,
+                 plan=None, progress_cb=None):
+    """Decode, analyze, segment, and render a video file.
+
+    phase_spans: optional user-edited list of [phase, i0, i1] (frames).
+    plan:        optional pre-built scene plan (list of dicts); if given,
+                 phase_spans is ignored and no segmentation runs.
+    Returns (plan, spans). Raises RuntimeError if ffmpeg fails.
+    """
+    print("decoding audio...")
+    samples = decode_audio(audio)
+    print("analyzing beats...")
+    feats = analyze(samples, 44100, fps)
+    if plan is None:
+        if phase_spans is None:
+            spans = segment_phases(feats, fps)
+        else:
+            spans = [list(sp) for sp in phase_spans]
+        plan = plan_scenes(spans, fps)
+    else:
+        plan = [dict(sp) for sp in plan]
+        for sp in plan:
+            sp["i0"] = int(sp["i0"])
+            sp["i1"] = int(sp["i1"])
+        spans = [[sp["phase"], sp["i0"], sp["i1"]] for sp in plan]
+    secs = feats["n"] / fps
+    mode = "GPU render + NVENC" if (use_gpu and use_nvenc) else \
+           "GPU render" if use_gpu else \
+           "NVENC" if use_nvenc else "CPU"
+    print(f"rendering {feats['n']} frames ({secs:.1f}s) at {W}x{H}@{fps} "
+          f"[{mode}]...")
+    print("scene plan:")
+    for sp in plan:
+        print(f"  {sp['i0'] / fps:7.1f}-{sp['i1'] / fps:7.1f}s  "
+              f"{sp['phase']:10s} -> {sp['scene']}")
+
+    a_ok, nch = has_audio(audio)
+    cmd = [ffmpeg_exe(), "-y",
+           "-f", "rawvideo", "-vcodec", "rawvideo",
+           "-s", f"{W}x{H}", "-pix_fmt", "rgb24",
+           "-r", str(fps), "-i", "pipe:0"]
+    if a_ok:
+        cmd += ["-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
+    if use_nvenc:
+        mbit = max(4, int(round(W * H / 1e6 * 8)))
+        cmd += ["-c:v", "h264_nvenc", "-preset", "p5",
+                "-rc", "vbr", "-cq", "19", "-b:v", f"{mbit}M",
+                "-pix_fmt", "yuv420p"]
+    else:
+        cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-pix_fmt", "yuv420p"]
+    if a_ok:
+        if adelay > 0:
+            cmd += ["-af", "adelay=" + "|".join([str(adelay)] * nch)]
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
+    cmd += ["-shortest", out]
+
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    try:
+        render(feats, plan, W, H, fps, proc.stdin, use_gpu, progress_cb)
+    except BrokenPipeError:
+        proc.wait()
+        raise RuntimeError("ffmpeg encoding failed")
+    finally:
+        proc.stdin.close()
+    rc = proc.wait()
+    if rc != 0:
+        raise RuntimeError("ffmpeg encoding failed")
+    return plan, spans
 
 
 # ------------------------- main -------------------------
@@ -1186,17 +1270,11 @@ def main():
     # ---- pick render + encode paths ----
     use_gpu = False
     if args.render in ("auto", "gpu"):
-        try:
-            import torch
-            if torch.cuda.is_available():
-                use_gpu = True
-            elif args.render == "gpu":
-                print("note: --render gpu requested but no CUDA device is "
-                      "available; using the CPU render.")
-        except ImportError:
-            if args.render == "gpu":
-                print("note: --render gpu requested but torch is not "
-                      "installed; using the CPU render.")
+        if cuda_available():
+            use_gpu = True
+        elif args.render == "gpu":
+            print("note: --render gpu requested but no CUDA device is "
+                  "available; using the CPU render.")
     use_nvenc = False
     if args.encode in ("auto", "nvenc"):
         if ffmpeg_has_nvenc():
@@ -1205,55 +1283,13 @@ def main():
             print("note: --encode nvenc requested but this ffmpeg build has "
                   "no h264_nvenc; using libx264.")
 
-    print("decoding audio...")
-    samples = decode_audio(args.audio)
-    print("analyzing beats...")
-    feats = analyze(samples, 44100, args.fps)
-    spans = segment_phases(feats, args.fps)
-    plan = plan_scenes(spans, args.fps)
-    secs = feats["n"] / args.fps
-    mode = "GPU render + NVENC" if (use_gpu and use_nvenc) else \
-           "GPU render" if use_gpu else \
-           "NVENC" if use_nvenc else "CPU"
-    print(f"rendering {feats['n']} frames ({secs:.1f}s) at {W}x{H}@{args.fps} "
-          f"[{mode}]...")
-    print("scene plan:")
-    for sp in plan:
-        print(f"  {sp['i0'] / args.fps:7.1f}-{sp['i1'] / args.fps:7.1f}s  "
-              f"{sp['phase']:10s} -> {sp['scene']}")
-
-    a_ok, nch = has_audio(args.audio)
-    cmd = [ffmpeg_exe(), "-y",
-           "-f", "rawvideo", "-vcodec", "rawvideo",
-           "-s", f"{W}x{H}", "-pix_fmt", "rgb24",
-           "-r", str(args.fps), "-i", "pipe:0"]
-    if a_ok:
-        cmd += ["-i", args.audio, "-map", "0:v:0", "-map", "1:a:0"]
-    if use_nvenc:
-        mbit = max(4, int(round(W * H / 1e6 * 8)))
-        cmd += ["-c:v", "h264_nvenc", "-preset", "p5",
-                "-rc", "vbr", "-cq", "19", "-b:v", f"{mbit}M",
-                "-pix_fmt", "yuv420p"]
-    else:
-        cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
-                "-pix_fmt", "yuv420p"]
-    if a_ok:
-        if args.adelay > 0:
-            cmd += ["-af", "adelay=" + "|".join([str(args.adelay)] * nch)]
-        cmd += ["-c:a", "aac", "-b:a", "192k"]
-    cmd += ["-shortest", out]
-
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     try:
-        render(feats, plan, W, H, args.fps, proc.stdin, use_gpu)
-    except BrokenPipeError:
-        proc.wait()
-        sys.exit("ffmpeg encoding failed")
-    finally:
-        proc.stdin.close()
-    rc = proc.wait()
-    if rc != 0:
-        sys.exit("ffmpeg encoding failed")
+        plan, spans = render_video(
+            args.audio, out, W=W, H=H, fps=args.fps, adelay=args.adelay,
+            use_gpu=use_gpu, use_nvenc=use_nvenc)
+    except RuntimeError as e:
+        sys.exit(str(e))
+
     print("wrote " + os.path.abspath(out))
 
 
