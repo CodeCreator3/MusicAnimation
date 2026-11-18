@@ -590,6 +590,10 @@ def _np_shim():
             return np.arange(n, dtype=np.float32)
 
         @staticmethod
+        def roll(a, shifts, dims):
+            return np.roll(a, shifts, axis=dims)
+
+        @staticmethod
         def frame(out):
             return np.ascontiguousarray(out * 255.0).astype(np.uint8).tobytes()
 
@@ -641,6 +645,10 @@ def _torch_shim(dev):
         @staticmethod
         def arange(n):
             return torch.arange(n, dtype=torch.float32, device=dev)
+
+        @staticmethod
+        def roll(a, shifts, dims):
+            return torch.roll(a, shifts, dims)
 
         @staticmethod
         def frame(out):
@@ -799,6 +807,8 @@ class Scene:
         self.span = span
         self.cx0, self.cy0 = W / 2.0, H / 2.0
         self.diag = math.hypot(W, H)
+        # optional full-screen flash / camera shake requested by a scene
+        self.fx = {"flash": 0.0, "shake": 0.0}
 
     def drift(self, t):
         """slow camera drift, shared by all scenes"""
@@ -806,6 +816,8 @@ class Scene:
                 self.cy0 + 0.012 * self.H * math.cos(t * 0.11))
 
     def tick(self, i, t, env, punch, overall):
+        # a scene may set self.fx["flash"]/["shake"] (0..1) to request
+        # a full-screen flash and/or camera shake for this frame
         raise NotImplementedError
 
 
@@ -971,9 +983,20 @@ class BurstScene(Scene):
         self.in_sp = rng.uniform(0.7, 1.5, self.N_in)
         self.in_sw = rng.uniform(0.6, 1.7, self.N_in) * \
             rng.choice(np.array([-1.0, 1.0]), self.N_in)
+        # extra explosion debris: a large second burst for a grander release
+        self.N_deb = 340
+        self.deb_th = rng.uniform(0.0, 2 * math.pi, self.N_deb)
+        self.deb_v = self.R * (0.8 + 3.6 * rng.random(self.N_deb))
+        self.deb_hue = (rng.random(self.N_deb)) % 1.0
+        # radiating light-beam angles (build up in suspense, fire at release)
+        self.N_beam = 16
+        self.beam_th = rng.uniform(0.0, 2 * math.pi, self.N_beam)
+        self.beam_len = 0.5 + 0.5 * rng.random(self.N_beam)
 
     def tick(self, i, t, env, punch, overall):
         rows = []
+        self.fx["flash"] = 0.0
+        self.fx["shake"] = 0.0
         cx, cy = self.drift(t)
         if t < self.t_exp:
             # ---- build + suspense: matter condenses into a singularity ----
@@ -1070,6 +1093,18 @@ class BurstScene(Scene):
                              (0.25 + 0.9 * b2) * (0.4 + 0.6 * ph),
                              hsv(0.55, 1.0, 1.0)))
 
+            # --- radiating light beams: thin in the build, brightening and
+            #     multiplying as the suspense peaks (the core overflows)
+            beam_n = 4 + int(12 * c2)
+            for k in range(beam_n):
+                th = self.beam_th[k % self.N_beam] + 0.15 * math.sin(t * 3.0 + k)
+                L = self.R * self.beam_len[k % self.N_beam] * (0.4 + 0.6 * c2)
+                bx = cx + L * math.cos(th)
+                by = cy + L * math.sin(th)
+                bamp = (0.15 + 1.6 * c2) * flick
+                rows.append(line(cx, cy, bx, by, (1.0 + 3.0 * c2) * self.s,
+                                 bamp, hsv((0.55 + 0.2 * c2) % 1.0, 1.0 - 0.5 * c2, 1.0)))
+
             # --- the singularity core: dark, dense, growing, then white-hot ---
             core_sig = (10 + 70 * b2 + 26 * c2) * self.s
             core_amp = (0.4 + 1.8 * b2 + 3.2 * c2) * flick
@@ -1080,33 +1115,63 @@ class BurstScene(Scene):
                               core_amp * 1.2, hsv(hue_c, 1.0 - 0.85 * c2,
                                                   1.0)))
         else:
-            # ---- release: flash, shockwaves, debris, then aftermath ----
+            # ---- release: a grander, sustained explosion ----
+            # the whole screen flashes white and the camera shakes on
+            # impact, then matter spews out in every direction for ~2.5 s
             tau = t - self.t_exp
-            fade = max(0.0, 1.0 - tau / 0.85)
-            r = 0.10 * self.R + self.v * tau
-            x = cx + r * np.cos(self.th)
-            y = cy + r * np.sin(self.th)
-            for n in range(self.N):
-                if not (-60 < x[n] < self.W + 60 and -60 < y[n] < self.H + 60):
-                    continue
-                rows.append(point(float(x[n]), float(y[n]),
-                                  (4.0 + 14.0 * tau) * self.s,
-                                  0.4 + 1.6 * fade,
-                                  hsv(self.hue_e[n], 1.0, 1.0)))
-            fl = math.exp(-tau * 7.0)
+            impact = math.exp(-tau * 6.0)
+            self.fx["flash"] = min(1.0, 1.3 * impact)
+            self.fx["shake"] = min(1.0, 1.6 * impact)
+
+            # massive matter: two debris pools spewing out over ~2.5 s
+            life = 2.5
+            fade = max(0.0, 1.0 - tau / life)
+            for pool_th, pool_v, pool_hue, Np, spd in (
+                    (self.th, self.v, self.hue_e, self.N, 1.0),
+                    (self.deb_th, self.deb_v, self.deb_hue, self.N_deb, 0.7)):
+                r = 0.06 * self.R + pool_v * tau * spd
+                x = cx + r * np.cos(pool_th)
+                y = cy + r * np.sin(pool_th)
+                for n in range(Np):
+                    if not (-80 < x[n] < self.W + 80 and
+                            -80 < y[n] < self.H + 80):
+                        continue
+                    rows.append(point(float(x[n]), float(y[n]),
+                                      (4.0 + 16.0 * tau) * self.s,
+                                      0.5 + 1.8 * fade,
+                                      hsv(pool_hue[n], 1.0, 1.0)))
+
+            # radiating beams of light firing out at the moment of impact
+            if tau < 1.6:
+                bl = 1.0 - tau / 1.6
+                for k in range(self.N_beam):
+                    th = self.beam_th[k] + 0.1 * math.sin(tau * 5.0 + k)
+                    L = self.diag * (0.3 + 0.7 * self.beam_len[k]) * \
+                        min(1.0, 0.3 + tau)
+                    bx = cx + L * math.cos(th)
+                    by = cy + L * math.sin(th)
+                    rows.append(line(cx, cy, bx, by, (3.0 + 6.0 * bl) * self.s,
+                                     (0.6 + 2.4 * bl) * bl,
+                                     hsv((0.0 + 0.06 * k) % 1.0, 0.8, 1.0)))
+
+            # a sequence of expanding shockwave rings (sustained)
+            for wave, base_r, wdt in ((0.0, 1600, 22), (0.12, 1200, 16),
+                                      (0.24, 900, 11), (0.36, 1500, 8)):
+                tw = tau - wave
+                if 0 < tw < 1.8:
+                    f2 = 1.0 - tw / 1.8
+                    rows.append(ring(cx, cy, base_r * self.s * tw,
+                                     wdt * self.s, 2.8 * f2,
+                                     hsv(0.93, 1.0, 1.0)))
+
+            # the white-hot core that blooms and lingers
+            fl = math.exp(-tau * 3.5)
             if fl > 0.01:
-                rows.append(point(cx, cy, (40 + 460 * tau) * self.s,
-                                  8.0 * fl, hsv(0.90, 0.45, 1.0)))
-                rows.append(point(cx, cy, (16 + 200 * tau) * self.s,
-                                  12.0 * fl, hsv(0.0, 0.08, 1.0)))
-            if tau < 1.3:
-                f2 = 1.0 - tau / 1.3
-                rows.append(ring(cx, cy, 1500 * self.s * tau, 18 * self.s,
-                                 2.6 * f2, hsv(0.93, 1.0, 1.0)))
-                rows.append(ring(cx, cy, 1000 * self.s * tau, 13 * self.s,
-                                 1.8 * f2, hsv(0.52, 1.0, 1.0)))
-                rows.append(ring(cx, cy, 1900 * self.s * tau, 8 * self.s,
-                                 1.2 * f2, hsv(0.12, 1.0, 1.0)))
+                rows.append(point(cx, cy, (60 + 520 * tau) * self.s,
+                                  10.0 * fl, hsv(0.90, 0.4, 1.0)))
+                rows.append(point(cx, cy, (24 + 240 * tau) * self.s,
+                                  14.0 * fl, hsv(0.0, 0.05, 1.0)))
+
             # aftermath: a bass-driven pulsing core that settles into
             # the sustain (the burst span runs up to 10 s past the hit)
             bass = min(1.6, float(env["bass"]))
@@ -1359,49 +1424,58 @@ class PolyScene(Scene):
 
 
 class SnakeScene(Scene):
-    """lanes of sharp squares that light up in sequence and travel across
-    the screen, trailing off behind the head (a moving snake)."""
+    """lanes of small sharp squares that light up cell-by-cell in a
+    beat-quantized snake: the head jumps to the next cell, the cells
+    behind it stay lit and fade in brightness. Big snakes step once
+    every fourth beat; small snakes step twice per beat. The square
+    size is constant along each body (the tail is never smaller than
+    the head) -- only the brightness fades."""
 
     def __init__(self, W, H, s, fps, rng, span):
         super().__init__(W, H, s, fps, rng, span)
+        self.NC = 26
+        self.spacing = W / (self.NC - 1)
         self.lanes = []
-        nl = 5
-        for k in range(nl):
-            ncells = 22
-            spacing = W / (ncells - 1)
+        for k in range(6):
+            big = (k % 3 == 0)  # every 3rd lane is a big, slow snake
+            if big:
+                size = 0.15 * self.spacing
+                rate = 0.25  # one cell every fourth beat
+            else:
+                size = (0.09 + 0.05 * float(rng.random())) * self.spacing
+                rate = 2.0  # two cells per beat
             self.lanes.append({
-                "y": (0.16 + 0.17 * k) * H, "ncells": ncells,
-                "spacing": spacing,
-                "speed": (4.0 + 3.0 * float(rng.random()))
-                          * (1.0 if k % 2 == 0 else -1.0),
-                "off": float(rng.random() * ncells),
-                "hue": (0.52 + 0.09 * k) % 1.0, "trail": 7,
-                "size": 0.30 * spacing * (1.0 - 0.04 * k),
+                "y": (0.12 + 0.15 * k) * H,
+                "dir": 1.0 if k % 2 == 0 else -1.0,
+                "head": float(rng.random() * self.NC),
+                "rate": rate,
+                "size": size,
+                "hue": (0.52 + 0.08 * k) % 1.0,
+                "trail": 6,
             })
+        self.last_beat_t = -10.0
 
     def tick(self, i, t, env, punch, overall):
         rows = []
-        speed_mul = (0.6 + 0.6 * overall) * (1.0 + 0.8 * punch)
+        # advance heads on each beat, by the lane's rate (in cells)
+        if punch > 0.40 and t - self.last_beat_t > 0.12:
+            self.last_beat_t = t
+            for ln in self.lanes:
+                ln["head"] += ln["rate"] * ln["dir"]
         for ln in self.lanes:
-            n = ln["ncells"]
-            head = (ln["off"] + t * ln["speed"] * speed_mul) % n
+            n = self.NC
+            head = ln["head"] % n
+            base = 0.45 + 0.4 * overall + 0.5 * punch
             for j in range(ln["trail"]):
-                idx = (int(head) - j) % n
-                x = idx * ln["spacing"]
-                fade = (1.0 - j / ln["trail"]) ** 1.6
-                if j == 0:  # the head: hot, near-white
-                    col = hsv(ln["hue"], 0.12, 1.0)
-                    amp = (1.5 + 1.3 * punch) * (0.7 + 0.5 * overall)
-                    half = ln["size"] * (1.0 + 0.4 * punch)
+                idx = int(round(head - j * ln["dir"])) % n
+                x = idx * self.spacing
+                fade = 1.0 - j / ln["trail"]
+                amp = base * (0.25 + 0.75 * fade)  # brightness fades, size stays
+                if j == 0:
+                    col = hsv(ln["hue"], 0.12, 1.0)  # hot near-white head
                 else:
                     col = hsv(ln["hue"], 1.0, 1.0)
-                    amp = (0.3 + 1.2 * overall + 0.9 * punch) * fade
-                    half = ln["size"] * (0.9 + 0.2 * fade)
-                rows.append(box(x, ln["y"], 0.0, half, amp, col))
-            if punch > 0.5:
-                hx = (int(head)) * ln["spacing"]
-                rows.append(ring(hx, ln["y"], 14 * punch * self.s, 6 * self.s,
-                                 0.8 * punch, hsv(ln["hue"], 0.1, 1.0)))
+                rows.append(box(x, ln["y"], 0.0, ln["size"], amp, col))
         return rows
 
 
@@ -1641,6 +1715,11 @@ class VortexScene(Scene):
         self.ph = rng.random(self.N)
         self.R = 0.46 * min(W, H)
         self.hue0 = float(rng.uniform(0.5, 0.7))
+        # little bombs thrown in from off-screen; their shrapnel falls
+        # into the vortex
+        self.bombs = []
+        self.shrap = []
+        self.last_bomb = -10.0
 
     def tick(self, i, t, env, punch, overall):
         rows = []
@@ -1671,7 +1750,62 @@ class VortexScene(Scene):
             rows.append(ring(cx, cy, R * (0.4 + 0.6 * punch), 8 * self.s,
                              1.2 * punch, hsv((self.hue0 + 0.3) % 1.0,
                                                1.0, 1.0)))
+        # ---- bombs thrown in from off-screen ----
+        if t - self.last_bomb > 1.1 and len(self.bombs) < 3:
+            self._throw_bomb(t)
+            self.last_bomb = t
+        alive = []
+        for b in self.bombs:
+            p = (t - b["t0"]) / b["dur"]
+            if p >= 1.0:
+                # the bomb reaches the vortex: burst into shrapnel that
+                # falls in
+                bx = b["x0"] + (cx - b["x0"]) * p
+                by = b["y0"] + (cy - b["y0"]) * p
+                for k in range(14):
+                    a = k * (2 * math.pi / 14) + self.rng.random() * 0.4
+                    self.shrap.append({
+                        "x": bx, "y": by, "cx": cx, "cy": cy,
+                        "ang": a, "r": 30 * self.s,
+                        "t0": t, "spin": float(self.rng.uniform(2.0, 5.0))
+                                       * (1.0 if self.rng.random() < 0.5 else -1.0),
+                        "hue": (self.hue0 + 0.1) % 1.0})
+                continue
+            bx = b["x0"] + (cx - b["x0"]) * p
+            by = b["y0"] + (cy - b["y0"]) * p - 90 * math.sin(p * math.pi)
+            rows.append(point(bx, by, 5 * self.s, 0.9, hsv(b["hue"], 0.2, 1.0)))
+            rows.append(point(bx, by, 12 * self.s, 0.5, hsv(b["hue"], 1.0, 1.0)))
+            alive.append(b)
+        self.bombs = alive
+        # ---- shrapnel falling into the vortex ----
+        alive_s = []
+        for sp in self.shrap:
+            age = t - sp["t0"]
+            if age > 0.9:
+                continue
+            f = age / 0.9
+            sp["r"] *= (1.0 - f * 0.9)
+            sp["ang"] += sp["spin"] / self.fps
+            r = max(0.02 * self.s, sp["r"]) * (0.3 + 0.7 * f)
+            sx = sp["cx"] + r * math.cos(sp["ang"])
+            sy = sp["cy"] + r * math.sin(sp["ang"])
+            rows.append(point(sx, sy, 2.5 * self.s,
+                              0.4 + 1.0 * (1.0 - f), hsv(sp["hue"], 1.0, 1.0)))
+            alive_s.append(sp)
+        self.shrap = alive_s
         return rows
+
+    def _throw_bomb(self, t):
+        r = self.rng
+        W, H = self.W, self.H
+        side = int(r.integers(0, 4))
+        if side == 0: x0, y0 = float(r.random()) * W, -40.0
+        elif side == 1: x0, y0 = W + 40.0, float(r.random()) * H
+        elif side == 2: x0, y0 = float(r.random()) * W, H + 40.0
+        else: x0, y0 = -40.0, float(r.random()) * H
+        self.bombs.append({"x0": x0, "y0": y0, "t0": t,
+                           "dur": float(r.uniform(0.8, 1.4)),
+                           "hue": (self.hue0 + float(r.random()) * 0.2) % 1.0})
 
 
 SCENES = {
@@ -1735,17 +1869,24 @@ class Director:
         w = min(1.0, (i - self.switch_i) / self.xf)
         w = w * w * (3.0 - 2.0 * w)  # smoothstep
         rows = []
+        fx = {"flash": 0.0, "shake": 0.0}
         if self.prev is not None and w < 1.0:
             rows += _scale(self.prev.tick(i, t, env, punch, overall), 1.0 - w)
+            fx["flash"] = max(fx["flash"], self.prev.fx.get("flash", 0.0))
+            fx["shake"] = max(fx["shake"], self.prev.fx.get("shake", 0.0))
             rows += _scale(self.cur.tick(i, t, env, punch, overall), w)
+            fx["flash"] = max(fx["flash"], self.cur.fx.get("flash", 0.0) * w)
+            fx["shake"] = max(fx["shake"], self.cur.fx.get("shake", 0.0) * w)
         else:
             rows += self.cur.tick(i, t, env, punch, overall)
+            fx["flash"] = max(fx["flash"], self.cur.fx.get("flash", 0.0))
+            fx["shake"] = max(fx["shake"], self.cur.fx.get("shake", 0.0))
         # global ambient halo, hue drifting over time
         hc = hsv((0.72 + 0.03 * t) % 1.0, 0.95, 1.0)
         a = 0.07 * (0.4 + 0.6 * overall)
         rows.append(point(self.cx0, self.cy0, self.halo_sig, 1.0,
                           (a * hc[0], a * hc[1], a * hc[2])))
-        return rows
+        return rows, fx
 
 
 # ------------------------- render loop -------------------------
@@ -1788,10 +1929,22 @@ def render(feats, plan, W, H, fps, writer, use_gpu, progress_cb=None,
         overall = (0.5 * e_state["bass"] + 0.3 * e_state["mid"]
                    + 0.2 * e_state["treb"])
 
-        rows = director.fields(i, t, e_state, punch_state, overall)
+        rows, cam = director.fields(i, t, e_state, punch_state, overall)
         img3 = fields_to_image(S, fx, fy, base, rows)
         out = 1.0 - S.exp(-img3 * exposure)
         out = out * vig[:, :, None]
+        # camera shake (deterministic jitter, scaled by the scene's shake)
+        sh = cam.get("shake", 0.0)
+        if sh > 0.02:
+            amp = 9.0 * s * sh
+            dx = int(round(amp * math.sin(i * 1.7)))
+            dy = int(round(amp * math.cos(i * 2.31)))
+            if dx or dy:
+                out = S.roll(out, [dy, dx], [0, 1])
+        # full-screen white flash
+        fl = cam.get("flash", 0.0)
+        if fl > 0.001:
+            out = out + fl
         S.clipout(out, 0.0, 1.0)
         writer.write(S.frame(out))
 

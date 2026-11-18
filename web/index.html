@@ -210,6 +210,22 @@
         </div>
       </div>
     </div>
+
+    <div class="panel" id="renderPanel">
+      <h2>Render</h2>
+      <div class="col">
+        <button class="primary" id="renderBtn" onclick="startRender()"
+          style="width:100%">Generate video</button>
+        <span id="renderStatus" class="hint"></span>
+        <div class="progress-outer hidden" id="progOuter">
+          <div class="progress-inner" id="progInner"></div>
+        </div>
+        <div id="resultRow" class="col" style="gap:4px">
+          <a id="dlLink" style="color:var(--accent2)" class="hidden">Download video</a>
+          <span class="hint" id="resultInfo"></span>
+        </div>
+      </div>
+    </div>
   </aside>
 
   <main>
@@ -261,22 +277,6 @@
         </div>
         <div id="phaseMenu" class="hidden"></div>
         <div id="status"></div>
-      </div>
-
-      <div class="panel hidden" id="renderPanel" style="margin-top:14px">
-        <h2>Render</h2>
-        <div class="row">
-          <button class="primary" id="renderBtn" onclick="startRender()">
-            Generate video</button>
-          <span id="renderStatus" class="hint"></span>
-        </div>
-        <div class="progress-outer hidden" id="progOuter">
-          <div class="progress-inner" id="progInner"></div>
-        </div>
-        <div class="row" style="margin-top:10px" id="resultRow">
-          <a id="dlLink" style="color:var(--accent2)" class="hidden">Download video</a>
-          <span class="hint" id="resultInfo"></span>
-        </div>
       </div>
     </div>
   </main>
