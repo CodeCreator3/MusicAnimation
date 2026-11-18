@@ -10,9 +10,11 @@ Turns an audio file into an MP4 with a glowing, beat-driven animation.
    - punch = spectral flux (onset strength), weighted 5x toward the lows
 3. **Phase segmentation**: the energy curve is smoothed into an
    attack/release envelope, quantized into quiet/mid/loud states with
-   hysteresis, and each stretch is labeled intro, build, drop,
-   sustain, break, or outro from the song's own dynamics (adaptive
-   thresholds, so it works on any track).
+   hysteresis, and each stretch is labeled intro, build, suspense,
+   release, sustain, break, or outro from the song's own dynamics
+   (adaptive thresholds, so it works on any track). A musical "drop"
+   is three phases: the rising **build**, a last ~2 s of **suspense**,
+   and the loud **release**.
 4. **The director** (a state machine) maps each phase to one of six
    scenes and crossfades between scenes at every boundary, so any
    scene can transition into any other scene smoothly:
@@ -34,11 +36,12 @@ Turns an audio file into an MP4 with a glowing, beat-driven animation.
 6. Raw RGB frames are piped to FFmpeg, which encodes H.264 + the
    original audio into an MP4.
 
-Phase -> scene mapping: intro -> stars, build -> poly (or burst if
-the build flows straight into a drop), drop -> lasers / poly (cycled),
-sustain -> orbs / grid (cycled), break -> grid / stars (cycled),
-outro -> poly. Long stretches are chunked at 12 s so scenes keep
-varying.
+Phase -> scene mapping: intro -> stars, build -> poly, suspense ->
+burst / poly, release -> lasers / poly (cycled), sustain -> orbs / grid
+(cycled), break -> grid / stars (cycled), outro -> poly. A build or
+suspense that flows straight into a release becomes one burst whose
+explosion lands on the release. Long stretches are chunked at 12 s so
+scenes keep varying.
 
 ## Setup
 

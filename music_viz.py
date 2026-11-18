@@ -13,15 +13,16 @@ Speed:
     numpy CPU render and libx264.
 
 Structure:
-    The song is segmented into musical phases (intro, build, drop,
-    sustain, break, outro) from its energy curve. A director (state
-    machine) picks a scene for each phase and crossfades between
-    scenes at every boundary:
+    The song is segmented into musical phases (intro, build, suspense,
+    release, sustain, break, outro) from its energy curve. A "drop" is
+    three phases: the rising build, a last ~2 s of suspense, and the
+    release. A director (state machine) picks a scene for each phase
+    and crossfades between scenes at every boundary:
 
         orbs   - the classic glowing orbs + core + beat rings
         lasers - rotating neon beams + scanline shots on hard punches
-        burst  - particles spiral in during a build, then explode
-                 at the drop
+        burst  - particles spiral in during a build/suspense, then
+                 explode exactly when the release hits
         grid   - a grid of spinning neon squares that morph between
                  shapes (circle, star, square, diamond, wave)
         stars  - a warp-tunnel starfield that streaks on punch
@@ -154,7 +155,12 @@ def segment_phases(feats, fps):
     """Label every frame with a musical phase.
 
     Returns a list of [phase, i0, i1] spans covering the whole song.
-    Phases: intro, build, drop, sustain, break, outro.
+    Phases: intro, build, suspense, release, sustain, break, outro.
+
+    A "drop" is really three phases in a row:
+      - build    - energy rising toward the hit
+      - suspense - the last ~2 s of tension right before it lands
+      - release  - the loud section itself (the drop hitting)
 
     Method:
       1. Build a fast-attack / slow-release energy envelope, normalized
@@ -166,10 +172,12 @@ def segment_phases(feats, fps):
          - everything before the first loud section -> intro (its last
            stretch is a build)
          - a loud section that rises out of a break (quiet, or a mid
-           dip with much lower punch) -> drop
+           dip with much lower punch) -> release
          - loud sections that just continue loud ones -> sustain
          - quiet / low-punch mid dips in the middle -> break
          - a quiet tail at the end -> outro
+      4. Carve a "suspense" window out of the last ~2 s of whatever
+         span sits right before each release.
     """
     n = feats["n"]
     punch = feats["punch"]
@@ -267,9 +275,9 @@ def segment_phases(feats, fps):
             if k > first_loud:
                 ps, pa, pb = runs[k - 1]
                 prev_break = (ps == 0) or mid_is_break(k - 1)
-                spans.append(["drop" if prev_break else "sustain", a, b])
+                spans.append(["release" if prev_break else "sustain", a, b])
             else:
-                spans.append(["drop", a, b])
+                spans.append(["release", a, b])
         elif state == 0:
             spans.append(["break", a, b])
         else:
@@ -294,16 +302,30 @@ def segment_phases(feats, fps):
     if len(merged) > 1 and merged[0][2] - merged[0][1] < int(2.0 * fps):
         merged[1][1] = merged[0][1]
         del merged[0]
-    return merged
+
+    # carve a "suspense" window (last ~2 s) out of the span right
+    # before each release
+    final = []
+    SUS = int(2.0 * fps)
+    for k, sp in enumerate(merged):
+        nxt = merged[k + 1] if k + 1 < len(merged) else None
+        if nxt and nxt[0] == "release" and sp[0] != "release" \
+                and sp[2] - sp[1] > SUS + int(0.8 * fps):
+            a = sp[2] - SUS
+            final.append([sp[0], sp[1], a])
+            final.append(["suspense", a, sp[2]])
+        else:
+            final.append(sp)
+    return final
 
 
 def plan_scenes(spans, fps):
     """Turn phase spans into a scene plan.
 
-    - a build followed directly by a drop becomes one "burst" span
-      (the scene converges during the build and explodes at the drop);
-      the burst covers the build plus 10 s of the drop, the rest of a
-      long drop becomes sustain
+    - a build (or suspense) followed directly by a release becomes one
+      "burst" span (the scene converges during the build and explodes
+      exactly when the release hits); the burst covers up to 10 s of
+      the release, the rest of a long release becomes sustain
     - spans longer than 12 s are chunked so scenes vary
     - each phase cycles through its scene list for variety
     - spans shorter than 3 s merge into the previous one
@@ -313,21 +335,21 @@ def plan_scenes(spans, fps):
     i = 0
     while i < len(spans):
         ph, a, b = spans[i]
-        if ph == "build" and i + 1 < len(spans) \
-                and spans[i + 1][0] == "drop" and spans[i + 1][1] == b:
-            drop_end = spans[i + 1][2]
-            end = min(drop_end, b + int(10 * fps))
+        if ph in ("build", "suspense") and i + 1 < len(spans) \
+                and spans[i + 1][0] == "release" and spans[i + 1][1] == b:
+            rel_end = spans[i + 1][2]
+            end = min(rel_end, b + int(10 * fps))
             plan.append({"scene": "burst", "i0": a, "i1": end,
-                         "drop": b, "phase": "build+drop"})
-            if end < drop_end:
-                plan.append({"scene": None, "i0": end, "i1": drop_end,
+                         "drop": b, "phase": ph + "+release"})
+            if end < rel_end:
+                plan.append({"scene": None, "i0": end, "i1": rel_end,
                              "drop": None, "phase": "sustain"})
             i += 2
             continue
         plan.append({"scene": None, "i0": a, "i1": b, "drop": None, "phase": ph})
         i += 1
 
-    # chunk long spans; the tail of a long drop becomes sustain
+    # chunk long spans; the tail of a long release becomes sustain
     split = []
     for sp in plan:
         if sp["scene"] != "burst" and sp["i1"] - sp["i0"] > CHUNK:
@@ -336,7 +358,7 @@ def plan_scenes(spans, fps):
             while c < sp["i1"]:
                 d = min(c + CHUNK, sp["i1"])
                 s2 = dict(sp)
-                if not first and sp["phase"] == "drop":
+                if not first and sp["phase"] == "release":
                     s2["phase"] = "sustain"
                 s2["i0"], s2["i1"] = c, d
                 split.append(s2)
@@ -346,10 +368,11 @@ def plan_scenes(spans, fps):
             split.append(sp)
     plan = split
 
-    cycles = {"drop": ["lasers", "poly"],
+    cycles = {"release": ["lasers", "poly"],
+              "suspense": ["burst", "poly"],
               "sustain": ["orbs", "grid"],
               "break": ["grid", "stars"]}
-    counters = {"drop": 0, "sustain": 0, "break": 0}
+    counters = {"release": 0, "suspense": 0, "sustain": 0, "break": 0}
     for sp in plan:
         ph = sp["phase"]
         if sp["scene"] == "burst":
