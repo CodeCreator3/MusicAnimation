@@ -594,9 +594,12 @@ function splitSpan(idx, t) {
 }
 
 // ---------- beats ----------
-function beatY(inten) { return (TL.curveTop + TL.curveH) - 6 - inten * (TL.curveH - 12); }
+// circles sit on the punch ticks: ticks rise up to ~30 px from the
+// curve baseline, so a full-strength beat circle lands on the tick tip
+const TICK_H = 30;
+function beatY(inten) { return (TL.curveTop + TL.curveH) - 3 - inten * (TICK_H - 6); }
 function intenY(py) { return Math.max(0, Math.min(1,
-  ((TL.curveTop + TL.curveH) - 6 - py) / (TL.curveH - 12))); }
+  ((TL.curveTop + TL.curveH) - 3 - py) / (TICK_H - 6))); }
 function beatsShown() { return (T1.v1 - T1.v0) < BEAT_SPAN; }
 function resetBeats() {
   if (!S.name) return;
