@@ -20,7 +20,8 @@ Structure:
     and crossfades between scenes at every boundary:
 
         orbs   - the classic glowing orbs + core + beat rings
-        lasers - rotating neon beams + scanline shots on hard punches
+        lasers - rotating lightsaber beams (bright near-white core with
+                 crisp edges, soft colored glow) + scanline shots
         burst  - particles spiral in during a build/suspense, then
                  explode exactly when the release hits
         grid   - a grid of spinning neon squares that morph between
@@ -774,12 +775,20 @@ class LasersScene(Scene):
             x2 = cx + R * math.cos(th)
             y2 = cy + R * math.sin(th)
             band = min(float(env[self.bands[k % 3]]), 1.6)
-            w = (5.0 + 17.0 * band) * self.s
             hue = (th / (2 * math.pi) + 0.06 * t) % 1.0
-            amp = 0.50 + 1.1 * band + 0.7 * punch
-            rows.append(line(cx, cy, x2, y2, w, amp, hsv(hue, 1.0, 1.0)))
-            rows.append(point(x2, y2, (6.0 + 8.0 * punch) * self.s,
-                              amp * 0.8, hsv(hue, 0.12, 1.0)))
+            # lightsaber: wide soft colored glow + a thin, bright,
+            # near-white core with crisp edges
+            glow_w = (5.0 + 11.0 * band) * self.s
+            core_w = (0.6 + 1.3 * band) * self.s
+            glow_amp = 0.50 + 0.95 * band + 0.55 * punch
+            core_amp = 1.7 + 1.7 * band + 1.3 * punch
+            rows.append(line(cx, cy, x2, y2, glow_w, glow_amp,
+                             hsv(hue, 1.0, 1.0)))
+            rows.append(line(cx, cy, x2, y2, core_w, core_amp,
+                             hsv(hue, 0.12, 1.0)))
+            # bright hot tip
+            rows.append(point(x2, y2, (5.0 + 8.0 * punch) * self.s,
+                              core_amp * 0.9, hsv(hue, 0.08, 1.0)))
         # scanline shots on hard punches
         if punch > 0.45 and t - self.last_scan_t > 0.16:
             self.scan.append({"p": float(self.rng.uniform(-0.38, 0.38)),
@@ -793,14 +802,18 @@ class LasersScene(Scene):
         for sc in self.scan:
             fade = 1.0 - sc["a"] / 7.0
             off = sc["p"] * min(self.W, self.H) + sc["a"] * 3.0 * self.s
-            w = (4.0 + 12.0 * punch) * self.s
             col = hsv(sc["hue"], 1.0, 1.0)
+            core = hsv(sc["hue"], 0.10, 1.0)
             if sc["h"]:
                 rows.append(line(-20.0, cy + off, self.W + 20.0, cy + off,
-                                 w, 1.5 * fade, col))
+                                 (5.0 + 10.0 * punch) * self.s, 1.4 * fade, col))
+                rows.append(line(-20.0, cy + off, self.W + 20.0, cy + off,
+                                 (0.7 + 1.2 * punch) * self.s, 2.4 * fade, core))
             else:
                 rows.append(line(cx + off, -20.0, cx + off, self.H + 20.0,
-                                 w, 1.5 * fade, col))
+                                 (5.0 + 10.0 * punch) * self.s, 1.4 * fade, col))
+                rows.append(line(cx + off, -20.0, cx + off, self.H + 20.0,
+                                 (0.7 + 1.2 * punch) * self.s, 2.4 * fade, core))
         hue_c = (0.60 + 0.05 * t) % 1.0
         rows.append(point(cx, cy, (18 + 24 * overall) * self.s,
                           0.5 + 1.4 * punch, hsv(hue_c, 1.0, 1.0)))

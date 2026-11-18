@@ -22,7 +22,7 @@ Turns an audio file into an MP4 with a glowing, beat-driven animation.
    | scene  | look |
    |--------|------|
    | `orbs`   | the classic: 10 neon orbs on Lissajous orbits (magenta bass, cyan mids, yellow-green treble), a spectrum-cycling core, expanding beat rings |
-   | `lasers` | six rotating neon beams from the center + full-screen scanline shots on hard punches |
+   | `lasers` | six rotating lightsaber beams: a bright near-white core with crisp edges over a soft colored glow, plus full-screen scanline shots on hard punches |
    | `burst`  | 110 particles spiral in as the build rises, then detonate at the drop: white flash, three shockwave rings, debris |
    | `grid`   | a 13x8 grid of spinning neon squares that morph between shapes (ring, star, square, diamond, wave) every 2.6 s |
    | `stars`  | a warp-tunnel starfield that streaks on punch |
