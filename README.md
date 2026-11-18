@@ -42,8 +42,11 @@ explosion lands on the release), a lone suspense -> burst / poly,
 release -> lasers / poly (cycled), sustain -> orbs / grid (cycled),
 break -> grid / stars (cycled), outro -> poly. The segmenter carves a
 build (from quiet breaks / intros) and a suspense (last ~2 s) before
-each release, so every drop has all three phases. Long stretches are
-chunked at 12 s so scenes keep varying.
+each release, but a build may also flow straight into a release with
+no suspense -- all of build+release, build+suspense+release, and
+suspense+release become one burst (the scene synthesizes the missing
+tension window). Long stretches are chunked at 12 s so scenes keep
+varying.
 
 ## Setup
 

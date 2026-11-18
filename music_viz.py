@@ -343,12 +343,14 @@ def segment_phases(feats, fps):
 def plan_scenes(spans, fps):
     """Turn phase spans into a scene plan.
 
-    - a drop arc -- build -> suspense -> release, with either or both
-      of the first two present -- becomes one "burst" span. The scene
-      brightens and tightens through the build, collapses at max
-      tension in the suspense, and detonates exactly when the release
-      hits; the burst covers up to 10 s of the release, the rest of a
-      long release becomes sustain
+    - a drop arc -- an optional build, an optional suspense, and a
+      release, with no other phase between them -- becomes one "burst"
+      span. So build+suspense+release, build+release (no suspense), and
+      suspense+release all work. The scene brightens and condenses
+      through the build, collapses at the peak, and detonates exactly
+      when the release hits; the burst covers up to 10 s of the release,
+      the rest of a long release becomes sustain. A bare release (no
+      build or suspense before it) is not an arc and keeps its own scene.
     - spans longer than 12 s are chunked so scenes vary
     - each phase cycles through its scene list for variety
     - spans shorter than 3 s merge into the previous one
@@ -358,41 +360,46 @@ def plan_scenes(spans, fps):
     i = 0
     while i < len(spans):
         ph, a, b = spans[i]
-        # does a drop arc start here?
-        arc = [spans[i]]
-        j = i + 1
-        while j < len(spans) and len(arc) < 3 \
-                and arc[-1][2] == spans[j][1] \
-                and spans[j][0] in ("build", "suspense", "release"):
-            if spans[j][0] == "release" and len(arc) >= 2:
-                arc.append(spans[j])
-                break
-            arc.append(spans[j])
-            j += 1
-        if len(arc) >= 2 and arc[-1][0] == "release" \
-                and any(x[0] in ("build", "suspense") for x in arc[:-1]):
-            release = arc[-1]
-            # the explosion moment: the release start, or the suspense
-            # end (they coincide). Prefer suspense end if present.
-            drop = None
-            susp = None
-            for x in arc[:-1]:
-                if x[0] == "suspense":
-                    drop = x[2]
-                    susp = x[1]
-            if drop is None:
-                drop = release[1]
-            if susp is None:
-                susp = max(arc[0][1], drop - int(2.0 * fps))
-            end = min(release[2], drop + int(10 * fps))
-            plan.append({"scene": "burst", "i0": arc[0][1], "i1": end,
-                         "drop": drop, "susp": susp,
-                         "phase": "+".join(x[0] for x in arc)})
-            if end < release[2]:
-                plan.append({"scene": None, "i0": end, "i1": release[2],
-                             "drop": None, "phase": "sustain"})
-            i = j + 1
-            continue
+        # does a drop arc start here? An arc is an optional build, an
+        # optional suspense, and a release, with no other phase between
+        # them. It can be build+suspense+release, build+release (no
+        # suspense), or suspense+release. It always starts at a build or
+        # suspense span -- never at the phase that precedes it (intro,
+        # break, ...), so that preceding phase keeps its own scene.
+        if ph in ("build", "suspense"):
+            arc = []
+            k = i
+            while k < len(spans) \
+                    and spans[k][0] in ("build", "suspense", "release"):
+                arc.append(spans[k])
+                if spans[k][0] == "release":
+                    break
+                k += 1
+            if arc and arc[-1][0] == "release" \
+                    and arc[0][0] in ("build", "suspense"):
+                release = arc[-1]
+                # explosion moment = release start; collapse (suspense)
+                # window = the last suspense span, or the 2 s before the
+                # release when there is no separate suspense span
+                drop = None
+                susp = None
+                for x in arc[:-1]:
+                    if x[0] == "suspense":
+                        drop = x[2]
+                        susp = x[1]
+                if drop is None:
+                    drop = release[1]
+                if susp is None:
+                    susp = max(arc[0][1], drop - int(2.0 * fps))
+                end = min(release[2], drop + int(10 * fps))
+                plan.append({"scene": "burst", "i0": arc[0][1], "i1": end,
+                             "drop": drop, "susp": susp,
+                             "phase": "+".join(x[0] for x in arc)})
+                if end < release[2]:
+                    plan.append({"scene": None, "i0": end, "i1": release[2],
+                                 "drop": None, "phase": "sustain"})
+                i = k + 1
+                continue
         plan.append({"scene": None, "i0": a, "i1": b, "drop": None, "phase": ph})
         i += 1
 
