@@ -55,6 +55,8 @@
   .hidden { display: none; }
   audio { width: 100%; margin-top: 10px; }
   canvas { display: block; width: 100%; }
+  #tl { height: 170px; }
+  #tl2 { height: 90px; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .chip {
     border-radius: 6px; padding: 4px 10px; font-size: 12px;
@@ -64,8 +66,8 @@
   .chip .sc { color: var(--accent2); }
   #phaseRow { display: flex; margin-top: 6px; }
   #phaseRow select {
-    width: 100%; font-size: 12px; padding: 4px 2px; text-align: center;
-    border-radius: 4px;
+    flex: 1 1 0; min-width: 34px; font-size: 12px; padding: 4px 2px;
+    text-align: center; border-radius: 4px;
   }
   .progress-outer {
     height: 10px; background: var(--panel2); border-radius: 5px;
@@ -264,7 +266,8 @@ function buildPhaseRow() {
     const sel = document.createElement("select");
     sel.innerHTML = PHASES.map(p =>
       `<option ${p === sp[0] ? "selected" : ""}>${p}</option>`).join("");
-    sel.style.flex = Math.max(1, sp[2] - sp[1]);
+    sel.style.flexGrow = Math.max(0.6, sp[2] - sp[1]);
+    sel.style.flexBasis = "0";
     sel.onchange = async () => {
       S.spans[i][0] = sel.value;
       S.plan = await api("/api/replan", {
@@ -300,11 +303,16 @@ function fmtT(t) {
 // ---------- timeline canvas ----------
 function canvasCtx(cv) {
   const dpr = window.devicePixelRatio || 1;
-  cv.width = cv.clientWidth * dpr;
-  cv.height = parseInt(cv.getAttribute("height")) * dpr;
+  const h = parseInt(cv.getAttribute("height"));
+  const pw = Math.max(1, Math.round(cv.clientWidth * dpr));
+  const ph = Math.round(h * dpr);
+  if (cv.width !== pw || cv.height !== ph) {
+    cv.width = pw;
+    cv.height = ph;
+  }
   const ctx = cv.getContext("2d");
-  ctx.scale(dpr, dpr);
-  return {ctx, w: cv.clientWidth, h: parseInt(cv.getAttribute("height"))};
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return {ctx, w: cv.clientWidth, h: h};
 }
 
 const T1 = {drag: -1};
