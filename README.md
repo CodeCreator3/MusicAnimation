@@ -8,18 +8,37 @@ Turns an audio file into an MP4 with a glowing, beat-driven animation.
 2. Every 1/30 s hop, the program computes:
    - band energy (bass 20-160 Hz, mid 160-1600 Hz, treble 1600-8000 Hz)
    - punch = spectral flux (onset strength), weighted 5x toward the lows
-3. 10 glowing orbs on slow Lissajous orbits react to the audio:
-   - bass orbs: big, dim, deep (slow, heavy)
-   - mid orbs: medium
-   - treble orbs: small, bright, near (fast, light)
-   - each punch adds an acceleration impulse; a spring pulls each orb
-     back to its orbit
-4. Hard punches fire a core flash and an expanding glowing ring.
-5. All glows are hand-rolled gaussian fields (no graphics libraries),
-   added on a black canvas, tone-mapped with `1 - exp(-x)` for soft
-   additive light, plus a vignette.
+3. **Phase segmentation**: the energy curve is smoothed into an
+   attack/release envelope, quantized into quiet/mid/loud states with
+   hysteresis, and each stretch is labeled intro, build, drop,
+   sustain, break, or outro from the song's own dynamics (adaptive
+   thresholds, so it works on any track).
+4. **The director** (a state machine) maps each phase to one of six
+   scenes and crossfades between scenes at every boundary, so any
+   scene can transition into any other scene smoothly:
+
+   | scene  | look |
+   |--------|------|
+   | `orbs`   | the classic: 10 neon orbs on Lissajous orbits (magenta bass, cyan mids, yellow-green treble), a spectrum-cycling core, expanding beat rings |
+   | `lasers` | six rotating neon beams from the center + full-screen scanline shots on hard punches |
+   | `burst`  | 110 particles spiral in as the build rises, then detonate at the drop: white flash, three shockwave rings, debris |
+   | `grid`   | a 13x8 grid of spinning neon squares that morph between shapes (ring, star, square, diamond, wave) every 2.6 s |
+   | `stars`  | a warp-tunnel starfield that streaks on punch |
+   | `poly`   | nested rotating neon polygons (triangle, square, pentagon, hexagon) that kick on the beat |
+
+5. Every visual is a list of additive "fields" (point, ring, line,
+   box) in linear light. All fields of a frame are batched into one
+   set of GPU kernels (exp + matmul), tone-mapped with `1 - exp(-x)`
+   for soft additive light, plus a vignette. No shape or graphics
+   libraries are used.
 6. Raw RGB frames are piped to FFmpeg, which encodes H.264 + the
    original audio into an MP4.
+
+Phase -> scene mapping: intro -> stars, build -> poly (or burst if
+the build flows straight into a drop), drop -> lasers / poly (cycled),
+sustain -> orbs / grid (cycled), break -> grid / stars (cycled),
+outro -> poly. Long stretches are chunked at 12 s so scenes keep
+varying.
 
 ## Setup
 
@@ -57,21 +76,29 @@ ffmpeg with h264_nvenc; the ffmpeg shipped in imageio-ffmpeg has it.
 
 With an NVIDIA GPU (this machine: RTX 4070) the render runs on CUDA
 via torch and the H.264 encode runs on NVENC. Both are automatic:
-- the 15 s test track renders in about 5 s (was 125 s on CPU)
-- the full 3:24 song renders in about 40 s (was ~13 min on CPU)
+- the full 3:24 song (state machine, 6 scenes) renders in about 2 min
+- the same song with a single scene renders in about 40 s
+- the 15 s test track renders in about 5-8 s
 
 Force one path or the other with `--render gpu|cpu|auto` and
 `--encode nvenc|x264|auto` (default `auto`: GPU if available).
 The GPU and CPU paths produce identical frames (tested to within
-1/255 per pixel).
+1-2/255 per pixel).
 
 On a machine without a GPU (or without torch installed), the program
 falls back to the numpy CPU render and libx264: about 15x slower than
 real time at 720p30.
 
+The scene plan is printed to the console before rendering, so you can
+see which phase maps to which scene. To tune the segmentation, edit
+`segment_phases` (energy thresholds, hysteresis) and `plan_scenes`
+(chunk length, phase->scene cycles).
+
 ## Files
 
-- `music_viz.py` - the main program
+- `music_viz.py` - the main program (segmentation, director, 6 scenes,
+  GPU + CPU field renderers)
 - `make_test_track.py` - generates `test_track.mp3` (15 s of synthetic
   kick + pad + noise for testing)
 - `test_track_viz.mp4` - example output
+- `sm_vivid.mp4` - full song with the state-machine scenes
