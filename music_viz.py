@@ -24,8 +24,9 @@ Structure:
                  crisp edges, soft colored glow) + scanline shots
         burst  - particles spiral in during a build/suspense, then
                  explode exactly when the release hits
-        grid   - a grid of spinning neon squares that morph between
-                 shapes (circle, star, square, diamond, wave)
+        grid   - drone show: a swarm of sharp neon squares that flies
+                 around with spring physics between formations
+                 (wave wall, circle, star, square, diamond)
         stars  - a warp-tunnel starfield that streaks on punch
         poly   - nested rotating neon polygons that kick on the beat
 
@@ -898,59 +899,103 @@ class BurstScene(Scene):
 
 
 class GridScene(Scene):
-    """a grid of spinning neon squares that morph between shapes"""
+    """drone show: a swarm of crisp neon squares that flies around
+    with spring / arrive physics between formations (wave wall,
+    circle, star, square, diamond). Punches kick the drones outward
+    and speed up their spin."""
 
-    PERIOD = 2.6  # seconds per shape
+    PERIOD = 3.0  # seconds per formation
 
     def __init__(self, W, H, s, fps, rng, span):
         super().__init__(W, H, s, fps, rng, span)
-        self.cols, self.nrows = 13, 8
-        self.cell = min(W / (self.cols + 1.5), H / (self.nrows + 1.5))
+        self.N = 96
+        self.R = 0.40 * min(W, H)
+        # scattered start so the show opens with a fly-in
+        self.pos = np.empty((self.N, 2), np.float32)
+        self.pos[:, 0] = rng.uniform(0.05, 0.95, self.N) * W
+        self.pos[:, 1] = rng.uniform(0.05, 0.95, self.N) * H
+        self.vel = np.zeros((self.N, 2), np.float32)
+        self.rot = rng.uniform(0.0, 6.28, self.N)
+        self.spin = rng.uniform(-1.6, 1.6, self.N)
+        self.hue_i = np.arange(self.N) / self.N
+        self.half = min(W, H) * 0.019
 
     def tick(self, i, t, env, punch, overall):
-        rows = []
+        dt = 1.0 / self.fps
         cx, cy = self.drift(t)
-        idx = int(t / self.PERIOD) % 5
-        f = (t / self.PERIOD) % 1.0
-        fe = f * f * (3.0 - 2.0 * f)
-        pulse = 0.55 + 0.50 * overall + 0.55 * punch
-        half_c = (self.cols - 1) / 2.0
-        half_r = (self.nrows - 1) / 2.0
-        for j in range(self.cols):
-            u = (j - half_c) / half_c
-            x = cx + (j - half_c) * self.cell
-            for k in range(self.nrows):
-                v = (k - half_r) / half_r
-                y = cy + (k - half_r) * self.cell
-                m = self._shape(idx, u, v, t)
-                m2 = self._shape((idx + 1) % 5, u, v, t)
-                m = min(1.0, max(0.0, m + (m2 - m) * fe))
-                amp = 0.07 + 1.7 * m * pulse
-                rot = t * (1.1 + 0.5 * ((j + k) % 3)) + j * 0.25 + k * 0.45
-                half = self.cell * (0.26 + 0.14 * m) * (1.0 + 0.10 * punch)
-                hue = (0.55 + 0.30 * math.sin(2 * math.pi * j / self.cols
-                                              - 1.6 * t + 0.9 * k / self.nrows)) % 1.0
-                rows.append(box(x, y, rot, half, amp, hsv(hue, 1.0, 1.0)))
+        P = self._formation(int(t / self.PERIOD) % 5, cx, cy, t)
+
+        # spring toward the formation + damping (slightly underdamped
+        # so the drones overshoot and settle like real swarms)
+        accel = 14.0 * (P - self.pos) - 5.5 * self.vel
+        if punch > 0.30:  # beat kick: push outward from the center
+            rvec = self.pos - np.array([cx, cy], np.float32)
+            rn = np.linalg.norm(rvec, axis=1, keepdims=True) + 1e-6
+            kick = 3.0 * min(2.5, punch) * self.R
+            accel += kick * rvec / rn / self.R
+        self.vel += accel * dt
+        self.pos += self.vel * dt
+        self.rot += (self.spin + 2.5 * punch) * dt
+
+        half = self.half * (0.9 + 0.5 * min(1.5, punch + overall * 0.5))
+        amp_b = 1.15 + 0.95 * overall + 0.85 * punch
+        amp_g = 0.30 + 0.55 * overall + 0.30 * punch
+        rows = []
+        pos = self.pos
+        for n in range(self.N):
+            x, y = pos[n]
+            if -40 < x < self.W + 40 and -40 < y < self.H + 40:
+                hue = (self.hue_i[n] + 0.03 * t) % 1.0
+                col = hsv(hue, 1.0, 1.0)
+                rows.append(box(float(x), float(y), float(self.rot[n]),
+                                half, amp_b, col))
+                rows.append(point(float(x), float(y), half * 2.1,
+                                  amp_g, col))
         return rows
 
-    @staticmethod
-    def _shape(k, u, v, t):
-        d = math.hypot(u, v)
-        if k == 0:      # ring
-            return 1.0 - min(1.0, abs(d - 0.80) / 0.24)
-        if k == 1:      # 5-point star
-            phi = math.atan2(v, u)
-            rs = 0.48 + 0.52 * abs(math.cos(2.5 * phi + 0.4 * t))
-            return 1.0 - min(1.0, max(0.0, d - rs) / 0.14)
-        if k == 2:      # square
-            ds = max(abs(u), abs(v))
-            return 1.0 - min(1.0, max(0.0, ds - 0.82) / 0.12)
-        if k == 3:      # diamond
-            dd = (abs(u) + abs(v)) / 1.30
-            return 1.0 - min(1.0, max(0.0, dd - 0.88) / 0.14)
-        # travelling wave
-        return 0.30 + 0.70 * abs(math.sin(2.4 * math.pi * u * 0.5 + 2.2 * t)) \
-            * (0.40 + 0.60 * abs(math.sin(1.8 * math.pi * v - 1.5 * t)))
+    def _formation(self, k, cx, cy, t):
+        """Target positions (N, 2) for formation k."""
+        N, R = self.N, self.R
+        a = np.arange(N) * (2 * math.pi / N)
+        if k == 0:  # wave wall: 16 x 6 grid with a travelling ripple
+            cols, rowsn = 16, 6
+            P = np.empty((N, 2), np.float32)
+            for i in range(N):
+                j, m = i % cols, i // cols
+                P[i, 0] = cx + (j - (cols - 1) / 2) * 2.2 * R / (cols - 1)
+                P[i, 1] = cy + (m - (rowsn - 1) / 2) * 1.1 * R / (rowsn - 1)
+            xn = (P[:, 0] - cx) / R
+            P[:, 1] += 0.16 * R * np.sin(2.0 * xn - 2.6 * t)
+            return P
+        if k == 1:  # circle
+            return np.stack([cx + R * np.cos(a), cy + R * np.sin(a)], 1).astype(np.float32)
+        if k == 2:  # 5-point star
+            r = R * (0.55 + 0.45 * np.abs(np.cos(2.5 * a)))
+            return np.stack([cx + r * np.cos(a), cy + r * np.sin(a)], 1).astype(np.float32)
+        if k == 3:  # square (evenly spaced along the perimeter)
+            A = 0.72 * R
+            side_len = 2 * A
+            s = np.arange(N) * 8 * A / N
+            side = (s // side_len).astype(int) % 4
+            off = s % side_len
+            P = np.empty((N, 2), np.float32)
+            P[side == 0] = (cx - A + off[side == 0], cy - A)
+            P[side == 1] = (cx + A, cy - A + off[side == 1])
+            P[side == 2] = (cx + A - off[side == 2], cy + A)
+            P[side == 3] = (cx - A, cy + A - off[side == 3])
+            return P
+        # diamond (perimeter of a 45-deg square)
+        D = 0.85 * R
+        sl = D * math.sqrt(2)
+        s = np.arange(N) * 4 * D * math.sqrt(2) / N
+        side = (s // sl).astype(int) % 4
+        off = (s % sl) / math.sqrt(2)
+        P = np.empty((N, 2), np.float32)
+        P[side == 0] = (cx + off[side == 0], cy - D + off[side == 0])
+        P[side == 1] = (cx + D - off[side == 1], cy + off[side == 1])
+        P[side == 2] = (cx - off[side == 2], cy + D - off[side == 2])
+        P[side == 3] = (cx - D + off[side == 3], cy - off[side == 3])
+        return P
 
 
 class StarsScene(Scene):
