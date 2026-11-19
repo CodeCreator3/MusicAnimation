@@ -97,8 +97,10 @@
   }
   #tlBlock .title { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
   canvas { display: block; width: 100%; }
-  #tl { height: 215px; cursor: crosshair; }
+  #tl { height: 254px; cursor: crosshair; }
   .tl-toolbar { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+  .fxtool { padding: 3px 8px; font-size: 11px; border-radius: 5px; }
+  .fxtool.current { border-color: var(--accent); color: #fff; }
 
   /* info bubble, top-right of the timeline block */
   .info {
@@ -255,7 +257,10 @@
             &bull; <b>space</b> = play / pause &middot; <b>hold + drag the curve</b> = scrub<br>
             &bull; <b>wheel</b> = zoom &middot; <b>shift+wheel / right-drag / alt+drag</b> = pan<br>
             &bull; zoom in close to reveal draggable beat markers<br>
-            The scene bar at the bottom is part of the timeline and zooms/pans with it.
+            &bull; the <b>effects bar</b> holds post-effect markers (a
+            second pass over the video); the <b>range bar</b> below it
+            selects the part of the song that renders
+            The scene bar is part of the timeline and zooms/pans with it.
           </span>
         </span>
         <canvas id="tl"></canvas>
@@ -264,6 +269,18 @@
           <span id="zoomInfo" class="hint"></span>
           <button onclick="resetBeats()" style="padding:3px 10px;font-size:12px">reset beats</button>
           <span id="beatInfo" class="hint"></span>
+        </div>
+        <div class="tl-toolbar">
+          <label class="small">effect:</label>
+          <button class="fxtool" data-fx="flash" onclick="setFxTool('flash')">F flash</button>
+          <button class="fxtool" data-fx="shake" onclick="setFxTool('shake')">S shake</button>
+          <button class="fxtool" data-fx="wave" onclick="setFxTool('wave')">W wave</button>
+          <button class="fxtool" data-fx="spiral" onclick="setFxTool('spiral')">P spiral</button>
+          <button class="fxtool" data-fx="glitch" onclick="setFxTool('glitch')">G glitch</button>
+          <button class="fxtool" data-fx="erase" onclick="setFxTool('erase')">&#10005; erase</button>
+          <span class="hint">click the effects bar to place, drag to move,
+            erase to remove. The range bar below selects the part of the
+            song that renders.</span>
         </div>
         <div class="legend">
           <span><i style="background:#7a5cff"></i>intro</span>
@@ -301,12 +318,17 @@ const SCENE_COL = {
 const TL = { curveTop: 8, curveH: 92,             // energy + beats: 8..100
              bandY: 108, bandH: 34,               // phases: 108..142
              sceneY: 150, sceneH: 46,              // scenes: 150..196
-             H: 215 };
+             effY: 202, effH: 22,                  // effects: 202..224
+             rngY: 228, rngH: 22,                  // video range: 228..250
+             H: 254 };
+const FX_COL = { flash: "#ffffff", shake: "#ff5e3a", wave: "#00e5ff",
+                 spiral: "#c084fc", glitch: "#22c55e" };
 const BEAT_SPAN = 45;  // show draggable beat circles when view < this many seconds
 
 const S = {
   inputs: [], name: null, fps: 30, dur: 0, n: 0,
   energy: [], punch: [], spans: [], plan: [], beats: [],
+  range: null, effects: [],
   time: 0, job: null, result: null, active: "audio"
 };
 
@@ -382,6 +404,7 @@ async function analyze() {
       spans: j.spans, plan: j.plan, beats: j.beats
     });
     S.time = 0; S.active = "audio";
+    S.range = [0, j.dur]; S.effects = [];
     viewSet(0, j.dur);
     $("tlBlock").classList.remove("hidden");
     $("renderPanel").classList.remove("hidden");
@@ -467,6 +490,7 @@ async function refreshProjectList(selectName) {
 }
 function projectData() {
   return { name: S.name, fps: S.fps, n: S.n, spans: S.spans, beats: S.beats,
+           range: S.range, effects: S.effects,
            out_dir: $("outDir").value.trim() || "outputs",
            out_name: $("outName").value.trim(), size: $("outSize").value };
 }
@@ -495,6 +519,11 @@ async function loadProjectSel() {
     else { $("status").textContent = "input " + (d.name || "?") + " not in inputs/"; return; }
     if (d.spans && d.spans.length) { S.spans = d.spans; await replan(); }
     if (d.beats) { S.beats = d.beats; drawTimeline(); }
+    if (d.range && d.range.length === 2) {
+      S.range = [Math.max(0, Math.min(d.range[0], S.dur - 1)),
+                 Math.min(S.dur, Math.max(d.range[1], 1))];
+    }
+    if (d.effects) { S.effects = d.effects; drawTimeline(); }
     $("status").textContent = "loaded project " + name;
   } catch (e) { alert("load failed: " + e.message); }
 }
@@ -620,7 +649,15 @@ function canvasCtx(cv) {
 }
 
 const T1 = {drag: -1, pan: null, scrub: false, beat: -1,
-            menuTimer: null, lastClickT: 0, lastClickX: 0, v0: 0, v1: 1};
+            menuTimer: null, lastClickT: 0, lastClickX: 0, v0: 0, v1: 1,
+            fxI: -1, rng: -1, tool: "flash"};
+
+function setFxTool(name) {
+  T1.tool = name;
+  document.querySelectorAll(".fxtool").forEach(b =>
+    b.classList.toggle("current", b.dataset.fx === name));
+}
+setFxTool("flash");
 
 function viewSet(v0, v1) {
   const MIN = 1.5;
@@ -733,6 +770,48 @@ function drawTimeline() {
       ctx.fillText(label, (a + b) / 2 - ctx.measureText(label).width / 2, TL.sceneY + 28);
   }
 
+  // effects bar (post-pass markers)
+  ctx.fillStyle = "#0d0d15";
+  ctx.fillRect(0, TL.effY, w, TL.effH);
+  ctx.strokeStyle = "#2a2a3d";
+  ctx.strokeRect(.5, TL.effY + .5, w - 1, TL.effH - 1);
+  ctx.fillStyle = "#8888a0"; ctx.font = "10px Segoe UI";
+  ctx.fillText("effects", 5, TL.effY + 14);
+  for (const e of S.effects) {
+    if (!FX_COL[e.type]) continue;
+    const x = X(e.t);
+    if (x < -12 || x > w + 12) continue;
+    const y0 = TL.effY + 4, sz = TL.effH - 8;
+    ctx.fillStyle = FX_COL[e.type];
+    ctx.fillRect(x - 6, y0, 12, sz);
+    ctx.strokeStyle = "rgba(0,0,0,.45)";
+    ctx.strokeRect(x - 5.5, y0 + .5, 11, sz - 1);
+    ctx.fillStyle = "#000"; ctx.font = "bold 9px Segoe UI";
+    ctx.fillText(e.type[0].toUpperCase(), x - 3, y0 + sz - 3);
+  }
+
+  // video range bar (the part of the song that renders)
+  ctx.fillStyle = "#0d0d15";
+  ctx.fillRect(0, TL.rngY, w, TL.rngH);
+  ctx.strokeStyle = "#2a2a3d";
+  ctx.strokeRect(.5, TL.rngY + .5, w - 1, TL.rngH - 1);
+  if (S.range) {
+    const r0 = Math.max(X(S.range[0]), 0);
+    const r1 = Math.min(X(S.range[1]), w);
+    ctx.fillStyle = "rgba(0,229,255,.14)";
+    ctx.fillRect(r0, TL.rngY + 2, Math.max(0, r1 - r0), TL.rngH - 4);
+    for (const hx of [S.range[0], S.range[1]]) {
+      const px = X(hx);
+      if (px < -8 || px > w + 8) continue;
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(px - 3.5, TL.rngY + 3, 7, TL.rngH - 6);
+      ctx.strokeStyle = "#00e5ff";
+      ctx.strokeRect(px - 3, TL.rngY + 3.5, 6, TL.rngH - 7);
+    }
+  }
+  ctx.fillStyle = "#8888a0"; ctx.font = "10px Segoe UI";
+  ctx.fillText("range", 5, TL.rngY + 14);
+
   // playhead (synced to playback)
   if (S.time >= T1.v0 && S.time <= T1.v1) {
     const px = X(S.time);
@@ -781,12 +860,43 @@ $("tl").addEventListener("pointerdown", e => {
     const d = Math.abs(bx - px);
     if (d < bd) { bd = d; best = i; }
   }
-  if (bd <= 10 && py >= TL.bandY - 6 && py <= TL.bandY + TL.bandH + 6) {
+  if (bd <= 12 && py < TL.effY) {
     T1.drag = best;
     e.target.setPointerCapture(e.pointerId);
     return;
   }
   const t = viewT(w, px);
+  // effects bar: place, move, or erase markers
+  if (py >= TL.effY && py <= TL.effY + TL.effH) {
+    const ft = Math.max(0, Math.min(S.dur, t));
+    if (T1.tool === "erase") {
+      let bi = -1, bd = 1e9;
+      S.effects.forEach((e, k) => {
+        const d = Math.abs(viewX(w, e.t) - px);
+        if (d < bd) { bd = d; bi = k; }
+      });
+      if (bi >= 0 && bd <= 12) { S.effects.splice(bi, 1); drawTimeline(); }
+      return;
+    }
+    let bi = -1, bd = 1e9;
+    S.effects.forEach((e, k) => {
+      const d = Math.abs(viewX(w, e.t) - px);
+      if (d < bd) { bd = d; bi = k; }
+    });
+    if (bd <= 12) { T1.fxI = bi; e.target.setPointerCapture(e.pointerId); return; }
+    if (FX_COL[T1.tool]) {
+      S.effects.push({type: T1.tool, t: ft});
+      drawTimeline();
+    }
+    return;
+  }
+  // video range bar: drag the start/end handles
+  if (py >= TL.rngY && py <= TL.rngY + TL.rngH && S.range) {
+    if (Math.abs(px - viewX(w, S.range[0])) <= 12) T1.rng = 0;
+    else if (Math.abs(px - viewX(w, S.range[1])) <= 12) T1.rng = 1;
+    if (T1.rng >= 0) e.target.setPointerCapture(e.pointerId);
+    return;
+  }
   // phase band region?
   if (py >= TL.bandY - 4 && py <= TL.bandY + TL.bandH + 4) {
     let idx = -1;
@@ -831,6 +941,23 @@ $("tl").addEventListener("pointermove", e => {
     drawTimeline();
     return;
   }
+  if (T1.fxI >= 0) {
+    const rect = e.target.getBoundingClientRect();
+    const w = rect.width;
+    S.effects[T1.fxI].t = Math.max(0, Math.min(S.dur,
+      viewT(w, e.clientX - rect.left)));
+    drawTimeline();
+    return;
+  }
+  if (T1.rng >= 0) {
+    const rect = e.target.getBoundingClientRect();
+    const w = rect.width;
+    const t = Math.max(0, Math.min(S.dur, viewT(w, e.clientX - rect.left)));
+    if (T1.rng === 0) S.range[0] = Math.min(t, S.range[1] - 0.5);
+    else S.range[1] = Math.max(t, S.range[0] + 0.5);
+    drawTimeline();
+    return;
+  }
   if (T1.scrub && (e.buttons & 1)) {
     const rect = e.target.getBoundingClientRect();
     setPlayTime(viewT(rect.width, e.clientX - rect.left));
@@ -849,10 +976,13 @@ $("tl").addEventListener("pointermove", e => {
 
 $("tl").addEventListener("pointercancel", () => {
   T1.pan = null; T1.scrub = false; T1.drag = -1; T1.beat = -1;
+  T1.fxI = -1; T1.rng = -1;
 });
 $("tl").addEventListener("pointerup", async e => {
   if (T1.pan) { T1.pan = null; return; }
   if (T1.beat >= 0) { T1.beat = -1; return; }
+  if (T1.fxI >= 0) { T1.fxI = -1; return; }
+  if (T1.rng >= 0) { T1.rng = -1; return; }
   if (T1.scrub) { T1.scrub = false; return; }
   if (T1.drag < 0) return;
   T1.drag = -1;
@@ -893,7 +1023,10 @@ async function startRender() {
       body: JSON.stringify({
         name: S.name, out_dir: $("outDir").value.trim() || "outputs",
         out_name: outName, size: $("outSize").value, fps: S.fps,
-        spans: S.spans, beats: S.beats
+        spans: S.spans, beats: S.beats,
+        start: S.range ? S.range[0] : null,
+        end: S.range ? S.range[1] : null,
+        effects: S.effects
       })
     });
     S.job = j.job;

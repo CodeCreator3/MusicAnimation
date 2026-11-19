@@ -415,6 +415,8 @@ def plan_scenes(spans, fps):
     ARC_PRE = ("build", "build_v2", "suspense", "suspense_v2")
     ARC_REL = ("release", "release_v2")
     plan = []
+    v2_scenes = ["vortex", "charge"]
+    v2_n = 0
     i = 0
     while i < len(spans):
         ph, a, b = spans[i]
@@ -449,8 +451,13 @@ def plan_scenes(spans, fps):
                 if susp is None:
                     susp = max(arc[0][1], drop - int(2.0 * fps))
                 end = min(release[2], drop + int(10 * fps))
-                # v1 arc -> the exploding burst; v2 arc -> the charging laser
-                scene = "charge" if release[0] == "release_v2" else "burst"
+                # v1 arc -> the exploding burst; v2 arcs alternate the
+                # condensing vortex and the charging laser
+                if release[0] == "release_v2":
+                    scene = v2_scenes[v2_n % 2]
+                    v2_n += 1
+                else:
+                    scene = "burst"
                 tail = "sustain" if release[0] == "release" else "sustain_v2"
                 plan.append({"scene": scene, "i0": arc[0][1], "i1": end,
                              "drop": drop, "susp": susp,
@@ -466,7 +473,7 @@ def plan_scenes(spans, fps):
     # chunk long spans; the tail of a long release becomes sustain
     split = []
     for sp in plan:
-        if sp["scene"] not in ("burst", "charge") \
+        if sp["scene"] not in ("burst", "charge", "vortex") \
                 and sp["i1"] - sp["i0"] > CHUNK:
             c = sp["i0"]
             first = True
@@ -506,7 +513,7 @@ def plan_scenes(spans, fps):
     counters = {ph: 0 for ph in pools}
     for sp in plan:
         ph = sp["phase"]
-        if sp["scene"] in ("burst", "charge"):
+        if sp["scene"] in ("burst", "charge", "vortex"):
             continue
         pool = pools.get(ph)
         if pool is None:
@@ -520,7 +527,7 @@ def plan_scenes(spans, fps):
     fin = []
     for sp in plan:
         if fin and sp["i1"] - sp["i0"] < int(3 * fps) \
-                and sp["scene"] not in ("burst", "charge"):
+                and sp["scene"] not in ("burst", "charge", "vortex"):
             fin[-1]["i1"] = sp["i1"]
         else:
             fin.append(sp)
@@ -1762,12 +1769,31 @@ class VortexScene(Scene):
         self.bombs = []
         self.shrap = []
         self.last_bomb = -10.0
+        self._prev_punch = 0.0
+        # drop-arc timing (present only when the vortex spans a
+        # build + suspense + release arc)
+        self.is_arc = span.get("drop") is not None
+        self.frozen = None
+        self.exploded = False
+        if self.is_arc:
+            self.t0 = span["i0"] / fps
+            self.t_exp = span["drop"] / fps
+            susp = span.get("susp")
+            self.t_susp = (susp if susp is not None
+                           else span["drop"] - int(2.0 * fps)) / fps
+            # release debris
+            self.N_deb = 300
+            self.deb_th = rng.uniform(0.0, 2 * math.pi, self.N_deb)
+            self.deb_v = self.R * (0.8 + 3.0 * rng.random(self.N_deb))
+            self.deb_hue = (self.hue0 + 0.2 * rng.random(self.N_deb)) % 1.0
 
     def tick(self, i, t, env, punch, overall):
-        rows = []
-        cx, cy = self.drift(t)
-        rot = t * (0.5 + 1.6 * overall + 2.0 * punch)
-        tighten = 1.0 - 0.35 * min(1.0, overall + 0.5 * punch)
+        if self.is_arc:
+            return self._arc_tick(i, t, env, punch, overall)
+        return self._plain_tick(i, t, env, punch, overall)
+
+    # ---- the galaxy arms + core (shared by plain, build, and hold) ----
+    def _galaxy(self, rows, cx, cy, rot, tighten, overall, punch, tcol):
         R = self.R * tighten
         for n in range(self.N):
             d = self.dist[n]
@@ -1777,7 +1803,7 @@ class VortexScene(Scene):
             x = cx + r * math.cos(th)
             y = cy + r * math.sin(th)
             inner = 1.0 - d
-            hue = (self.hue0 + 0.25 * d + 0.02 * t) % 1.0
+            hue = (self.hue0 + 0.25 * d + 0.02 * tcol) % 1.0
             amp = (0.25 + 1.1 * inner * inner) * (0.6 + 0.9 * overall
                                                   + 0.6 * punch)
             sz = (1.6 + 3.0 * inner) * self.s
@@ -1792,52 +1818,142 @@ class VortexScene(Scene):
             rows.append(ring(cx, cy, R * (0.4 + 0.6 * punch), 8 * self.s,
                              1.2 * punch, hsv((self.hue0 + 0.3) % 1.0,
                                                1.0, 1.0)))
-        # ---- bombs thrown in from off-screen ----
-        if t - self.last_bomb > 1.1 and len(self.bombs) < 3:
-            self._throw_bomb(t)
+
+    # ---- bombs thrown in from off-screen; each is timed to explode
+    #      on the next beat; its shrapnel is pulled into the vortex
+    #      (shared by plain and build) ----
+    def _bombs(self, rows, t, cx, cy, punch):
+        # rising edge of a hard punch = a beat
+        beat = punch > 0.5 and self._prev_punch <= 0.5
+        self._prev_punch = punch
+        if (beat or (len(self.bombs) == 0
+                     and t - self.last_bomb > self.beat_period * 2.5)) \
+                and len(self.bombs) < 3:
+            self._throw_bomb(t, dur=self.beat_period if beat else None)
             self.last_bomb = t
         alive = []
         for b in self.bombs:
             p = (t - b["t0"]) / b["dur"]
-            if p >= 1.0:
-                # the bomb reaches the vortex: burst into shrapnel that
-                # falls in
+            if p >= b["ep"]:
+                p = b["ep"]
                 bx = b["x0"] + (cx - b["x0"]) * p
-                by = b["y0"] + (cy - b["y0"]) * p
-                for k in range(14):
-                    a = k * (2 * math.pi / 14) + self.rng.random() * 0.4
+                by = b["y0"] + (cy - b["y0"]) * p - 90 * math.sin(p * math.pi)
+                bx += b["ox"]
+                by += b["oy"]
+                for k in range(16):
+                    a = float(self.rng.random()) * 2 * math.pi
+                    v = float(self.rng.uniform(120.0, 320.0)) * self.s
                     self.shrap.append({
-                        "x": bx, "y": by, "cx": cx, "cy": cy,
-                        "ang": a, "r": 30 * self.s,
-                        "t0": t, "spin": float(self.rng.uniform(2.0, 5.0))
-                                       * (1.0 if self.rng.random() < 0.5 else -1.0),
-                        "hue": (self.hue0 + 0.1) % 1.0})
+                        "x": bx, "y": by,
+                        "vx": v * math.cos(a), "vy": v * math.sin(a),
+                        "t0": t,
+                        "hue": (0.06 + float(self.rng.random()) * 0.05) % 1.0})
                 continue
+            p = min(p, b["ep"])
             bx = b["x0"] + (cx - b["x0"]) * p
             by = b["y0"] + (cy - b["y0"]) * p - 90 * math.sin(p * math.pi)
-            rows.append(point(bx, by, 5 * self.s, 0.9, hsv(b["hue"], 0.2, 1.0)))
-            rows.append(point(bx, by, 12 * self.s, 0.5, hsv(b["hue"], 1.0, 1.0)))
+            bx += b["ox"]
+            by += b["oy"]
+            rows.append(point(bx, by, 6.0 * self.s, 1.8, (1.0, 1.0, 1.0)))
+            rows.append(point(bx, by, 14.0 * self.s, 0.9,
+                              hsv(b["hue"], 1.0, 1.0)))
             alive.append(b)
         self.bombs = alive
-        # ---- shrapnel falling into the vortex ----
         alive_s = []
+        dt = 1.0 / self.fps
         for sp in self.shrap:
             age = t - sp["t0"]
-            if age > 0.9:
+            if age > 5.0:
                 continue
-            f = age / 0.9
-            sp["r"] *= (1.0 - f * 0.9)
-            sp["ang"] += sp["spin"] / self.fps
-            r = max(0.02 * self.s, sp["r"]) * (0.3 + 0.7 * f)
-            sx = sp["cx"] + r * math.cos(sp["ang"])
-            sy = sp["cy"] + r * math.sin(sp["ang"])
-            rows.append(point(sx, sy, 2.5 * self.s,
-                              0.4 + 1.0 * (1.0 - f), hsv(sp["hue"], 1.0, 1.0)))
+            dxc = cx - sp["x"]
+            dyc = cy - sp["y"]
+            d = max(20.0, math.hypot(dxc, dyc))
+            pull = 9.0 * 1e4 * self.s / d
+            sp["vx"] += dxc / d * pull * dt
+            sp["vy"] += dyc / d * pull * dt
+            sp["x"] += sp["vx"] * dt
+            sp["y"] += sp["vy"] * dt
+            if d < 30.0 * self.s:
+                continue
+            rows.append(point(sp["x"], sp["y"], 4.5 * self.s, 3.5,
+                              hsv(sp["hue"], 0.85, 1.0)))
             alive_s.append(sp)
         self.shrap = alive_s
+
+    # ---- a plain vortex (no drop arc) ----
+    def _plain_tick(self, i, t, env, punch, overall):
+        rows = []
+        cx, cy = self.drift(t)
+        rot = t * (0.5 + 1.6 * overall + 2.0 * punch)
+        tighten = 1.0 - 0.35 * min(1.0, overall + 0.5 * punch)
+        self._galaxy(rows, cx, cy, rot, tighten, overall, punch, t)
+        self._bombs(rows, t, cx, cy, punch)
         return rows
 
-    def _throw_bomb(self, t):
+    # ---- the drop arc: build -> (held) suspense -> release ----
+    def _arc_tick(self, i, t, env, punch, overall):
+        self.fx["flash"] = 0.0
+        self.fx["shake"] = 0.0
+        cx, cy = self.drift(t)
+        if t < self.t_susp:
+            # build: the galaxy spins up and condenses toward a
+            # singularity; bombs are thrown in and their shrapnel is
+            # consumed. Hold the last frame as the frozen singularity.
+            bt = max(self.t_susp - self.t0, 1e-3)
+            b = min(max((t - self.t0) / bt, 0.0), 1.0)
+            b2 = b * b * (3.0 - 2.0 * b)
+            rot = t * (0.5 + 1.6 * overall + 2.0 * punch) + 3.0 * b2
+            tighten = 1.0 - 0.8 * b2
+            ov_eff = overall + 0.8 * b2
+            pu_eff = punch + 1.4 * b2
+            rows = []
+            self._galaxy(rows, cx, cy, rot, tighten, ov_eff, pu_eff, t)
+            self._bombs(rows, t, cx, cy, pu_eff)
+            self.frozen = rows
+            return list(rows)
+        if t < self.t_exp:
+            # suspense: nothing changes; the singularity holds frozen
+            if self.frozen is None:
+                self.frozen = []
+                self._galaxy(self.frozen, cx, cy, 3.0, 0.2, 1.0, 1.0, 0.0)
+            return list(self.frozen)
+        # release: the singularity detonates
+        self.exploded = True
+        tau = t - self.t_exp
+        rows = []
+        flash = math.exp(-tau * 6.0)
+        if tau <= 1.0 / self.fps:
+            self.fx["flash"] = 1.0
+            self.fx["shake"] = 1.0
+        else:
+            self.fx["flash"] = 0.4 * flash
+            self.fx["shake"] = 0.4 * flash
+        bass = min(1.6, float(env["bass"]))
+        if tau < 1.5:
+            f = 1.0 - tau / 1.5
+            rows.append(ring(cx, cy, 900 * self.s * tau, 16 * self.s,
+                             2.5 * f, hsv(0.0, 0.05, 1.0)))
+            rows.append(ring(cx, cy, 650 * self.s * tau, 10 * self.s,
+                             1.8 * f, hsv((self.hue0 + 0.3) % 1.0, 1.0, 1.0)))
+            rows.append(ring(cx, cy, 450 * self.s * tau, 7 * self.s,
+                             1.3 * f, hsv((self.hue0 + 0.6) % 1.0, 1.0, 1.0)))
+        for n in range(self.N_deb):
+            r = (self.deb_v[n] * self.s * (1.0 - math.exp(-tau * 1.2))
+                 + 20 * self.s * tau)
+            th = self.deb_th[n] + tau * 0.5
+            x = cx + r * math.cos(th)
+            y = cy + r * math.sin(th)
+            hue = (self.deb_hue[n] + 0.05 * tau) % 1.0
+            rows.append(point(x, y, (2.0 + 3.0 * min(1.0, tau)) * self.s,
+                              0.3 + 1.0 * math.exp(-tau * 0.6),
+                              hsv(hue, 1.0, 1.0)))
+        rows.append(point(cx, cy, (30 + 40 * bass) * self.s,
+                          0.4 + 1.2 * bass, hsv(self.hue0, 1.0, 1.0)))
+        rows.append(point(cx, cy, (14 + 18 * bass) * self.s,
+                          0.6 + 1.5 * bass, hsv(self.hue0, 0.1, 1.0)))
+        return rows
+
+    def _throw_bomb(self, t, dur=None):
         r = self.rng
         W, H = self.W, self.H
         side = int(r.integers(0, 4))
@@ -1845,8 +1961,19 @@ class VortexScene(Scene):
         elif side == 1: x0, y0 = W + 40.0, float(r.random()) * H
         elif side == 2: x0, y0 = float(r.random()) * W, H + 40.0
         else: x0, y0 = -40.0, float(r.random()) * H
+        if dur is None:
+            dur = float(r.uniform(0.8, 1.4))
+        dur = max(0.35, float(dur))
+        # the bomb aims just past the edge of the vortex and explodes
+        # there at the end of its flight (ep = 1.0), so a beat-timed
+        # throw detonates on the beat
+        ao = float(r.uniform(0.0, 2 * math.pi))
+        ad = float(r.uniform(120.0, 260.0)) * self.s
         self.bombs.append({"x0": x0, "y0": y0, "t0": t,
-                           "dur": float(r.uniform(0.8, 1.4)),
+                           "dur": dur,
+                           "ep": 1.0,
+                           "ox": ad * math.cos(ao),
+                           "oy": ad * math.sin(ao),
                            "hue": (self.hue0 + float(r.random()) * 0.2) % 1.0})
 
 
@@ -1891,6 +2018,20 @@ class Director:
         self.xf = max(4, int(0.55 * fps))
         self.halo_sig = min(W, H) * 0.55
         self.beat_period = beat_period
+
+    def warm_to(self, i):
+        """skip to the span that contains frame i, so a part of the
+        song can render without processing the earlier frames"""
+        k = 0
+        for m in range(len(self.plan)):
+            if i >= self.plan[m]["i0"]:
+                k = m
+            else:
+                break
+        self.idx = k
+        self.cur = self._make(self.plan[k])
+        self.prev = None
+        self.switch_i = i - self.xf  # fully faded in, no crossfade
 
     def _make(self, sp):
         sc = SCENES[sp["scene"]](self.W, self.H, self.s, self.fps,
@@ -1937,7 +2078,7 @@ class Director:
 # ------------------------- render loop -------------------------
 
 def render(feats, plan, W, H, fps, writer, use_gpu, progress_cb=None,
-           beats=None):
+           beats=None, i0=0, i1=None):
     if use_gpu:
         S = _torch_shim(_cuda_dev())
     else:
@@ -1968,9 +2109,16 @@ def render(feats, plan, W, H, fps, writer, use_gpu, progress_cb=None,
     e_state = {"bass": 0.0, "mid": 0.0, "treb": 0.0}
     punch_state = 0.0
     exposure = 1.0
-    done = n // 12 + 1
+    total = n
+    if i1 is None:
+        i1 = n
+    i0 = max(0, min(i0, n - 1))
+    i1 = max(i0 + 1, min(i1, n))
+    total = i1 - i0
+    director.warm_to(i0)
+    done = total // 12 + 1
 
-    for i in range(n):
+    for i in range(i0, i1):
         t = i / fps
         for b in ("bass", "mid", "treb"):
             v = float(feats[b][i])
@@ -2000,13 +2148,149 @@ def render(feats, plan, W, H, fps, writer, use_gpu, progress_cb=None,
         writer.write(S.frame(out))
 
         S.sync()
-        if i % done == 0:
-            print(f"  frame {i + 1}/{n}")
+        if (i - i0) % done == 0:
+            print(f"  frame {i - i0 + 1}/{total}")
             if progress_cb:
-                progress_cb(i, n)
-    print(f"  frame {n}/{n}")
+                progress_cb(i - i0, total)
+    print(f"  frame {total}/{total}")
     if progress_cb:
-        progress_cb(n, n)
+        progress_cb(total, total)
+
+
+# ------------------------- second-pass effects -------------------------
+# each marker fires its effect for a fixed duration after its time
+FX_DURS = {"flash": 0.7, "shake": 1.0, "wave": 1.0,
+           "spiral": 1.0, "glitch": 0.8}
+
+
+def _env(f, jitter, n):
+    """envelope: rises fast, then stutters instead of falling smoothly.
+    jitter 0..1 sets how often the effect cuts in and out."""
+    base = max(0.0, math.sin(math.pi * min(1.0, f)))
+    if jitter <= 0:
+        return base
+    r = np.random.default_rng(n * 101 + 7)
+    on = (base > 0.15) and (r.random() > 0.55 * jitter)
+    return base if on else 0.0
+
+
+def _effect_frame(fr, kind, env, t, n, W, H, rrn, th0, rr, cx, cy,
+                  rowy, colx):
+    """one frame (H, W, 3) uint8 through one effect at envelope env."""
+    if env <= 0.01:
+        return fr
+    rng = np.random.default_rng(n * 7919 + 13)
+    if kind == "flash":
+        v = fr.astype(np.int16) + int(230 * env)
+        return np.clip(v, 0, 255).astype(np.uint8)
+    if kind == "shake":
+        # random jump every frame, no smooth sine
+        dx = int(rng.integers(-28, 28) * env)
+        dy = int(rng.integers(-18, 18) * env)
+        return np.roll(fr, (dy, dx), (0, 1))
+    if kind == "wave":
+        # random per-row jumps, re-rolled every few frames
+        seed = n // 2
+        rng2 = np.random.default_rng(seed * 31 + 5)
+        sh = rng2.integers(-int(60 * env), int(60 * env), H)
+        xs = (colx[None, :] + sh[:, None]) % W
+        return fr[rowy[:, None], xs]
+    if kind == "spiral":
+        # random twist each frame, inner pixels twist hardest
+        ang = rng.uniform(0.0, 1.6 * env)
+        xs = np.clip((cx + rr * np.cos(th0 + ang * (1.0 - rrn))).astype(np.int32), 0, W - 1)
+        ys = np.clip((cy + rr * np.sin(th0 + ang * (1.0 - rrn))).astype(np.int32), 0, H - 1)
+        return fr[ys, xs]
+    # glitch: tear the image in random horizontal bands, and split the
+    # red / green / blue channels into misaligned frames
+    out = fr.copy()
+    for _ in range(int(10 + 14 * env)):
+        y0 = int(rng.integers(0, H - 4))
+        bh = int(rng.integers(3, 30))
+        sh = int(rng.integers(-90, 90))
+        out[y0:y0 + bh] = np.roll(out[y0:y0 + bh], sh, axis=1)
+    # channel tear: each rgb plane shifts horizontally by its own
+    # random offset, and a few rows of each plane come from a
+    # different offset, so the color frames are torn apart
+    for c in range(3):
+        base = int(rng.integers(-16, 16) * (0.5 + env))
+        out[:, :, c] = np.roll(fr[:, :, c], base, axis=1)
+        for _ in range(int(3 + 5 * env)):
+            y0 = int(rng.integers(0, H - 4))
+            bh = int(rng.integers(4, 24))
+            sh2 = base + int(rng.integers(-30, 30))
+            out[y0:y0 + bh, :, c] = np.roll(fr[y0:y0 + bh, :, c], sh2, axis=1)
+    return out
+
+
+def apply_effects(video, fx, fps, W, H, n_frames, local_t0,
+                  nvenc, has_audio):
+    """Second pass over the finished video: decode it, apply the post
+    effects at the marker times, and re-encode. fx: list of
+    {"type", "t"} in song seconds; local_t0 is the song time of the
+    first frame of this video."""
+    ev = []
+    for e in fx:
+        if e.get("type") not in FX_DURS:
+            continue
+        tl = e["t"] - local_t0
+        if -1.0 < tl < n_frames / fps:
+            ev.append({"type": e["type"], "t0": max(0.0, tl),
+                       "dur": FX_DURS[e["type"]]})
+    if not ev:
+        return
+    print("post pass: " + ", ".join(e["type"] for e in ev))
+    rd = subprocess.Popen(
+        [ffmpeg_exe(), "-y", "-i", video,
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+        stdout=subprocess.PIPE)
+    out_tmp = video + ".fx.mp4"
+    cmd = [ffmpeg_exe(), "-y",
+           "-f", "rawvideo", "-vcodec", "rawvideo",
+           "-s", f"{W}x{H}", "-pix_fmt", "rgb24", "-r", str(fps),
+           "-i", "pipe:0"]
+    if has_audio:
+        cmd += ["-i", video, "-map", "0:v:0", "-map", "1:a:0",
+                "-c:a", "copy"]
+    if nvenc:
+        mbit = max(4, int(round(W * H / 1e6 * 8)))
+        cmd += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
+                "-cq", "19", "-b:v", f"{mbit}M", "-pix_fmt", "yuv420p"]
+    else:
+        cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-pix_fmt", "yuv420p"]
+    cmd += ["-shortest", out_tmp]
+    wr = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    sz = W * H * 3
+    cx, cy = (W - 1) / 2.0, (H - 1) / 2.0
+    gx = np.arange(W, dtype=np.float64)[None, :]
+    gy = np.arange(H, dtype=np.float64)[:, None]
+    rr = np.sqrt((gx - cx) ** 2 + (gy - cy) ** 2)
+    rrn = rr / (0.5 * math.hypot(W, H))
+    th0 = np.arctan2(gy - cy, gx - cx)
+    rowy = np.arange(H, dtype=np.int32)
+    colx = np.arange(W, dtype=np.int32)
+    n = 0
+    while True:
+        buf = rd.stdout.read(sz)
+        if len(buf) < sz:
+            break
+        fr = np.frombuffer(buf, np.uint8).reshape(H, W, 3)
+        t = n / fps
+        for e in ev:
+            f = (t - e["t0"]) / e["dur"]
+            if f < 0.0 or f >= 1.0:
+                continue
+            env = _env(f, 0.8, n)
+            fr = _effect_frame(fr, e["type"], env, t, n, W, H,
+                               rrn, th0, rr, cx, cy, rowy, colx)
+        wr.stdin.write(fr.tobytes())
+        n += 1
+    wr.stdin.close()
+    rd.stdout.close()
+    wr.wait()
+    rd.wait()
+    os.replace(out_tmp, video)
 
 
 def _cuda_dev():
@@ -2024,7 +2308,8 @@ def cuda_available():
 
 def render_video(audio, out, W=1280, H=720, fps=30, adelay=40,
                  use_gpu=False, use_nvenc=False, phase_spans=None,
-                 plan=None, progress_cb=None, beats=None):
+                 plan=None, progress_cb=None, beats=None,
+                 start=None, end=None, effects=None):
     """Decode, analyze, segment, and render a video file.
 
     phase_spans: optional user-edited list of [phase, i0, i1] (frames).
@@ -2032,6 +2317,9 @@ def render_video(audio, out, W=1280, H=720, fps=30, adelay=40,
                  phase_spans is ignored and no segmentation runs.
     beats:       optional list of [time_sec, intensity]; if given, the
                  punch curve is built from these instead of the audio.
+    start, end:  optional range in seconds; only that part renders.
+    effects:     optional list of {"type", "t"}; a second pass applies
+                 these post effects at their marker times.
     Returns (plan, spans). Raises RuntimeError if ffmpeg fails.
     """
     print("decoding audio...")
@@ -2050,11 +2338,15 @@ def render_video(audio, out, W=1280, H=720, fps=30, adelay=40,
             sp["i0"] = int(sp["i0"])
             sp["i1"] = int(sp["i1"])
         spans = [[sp["phase"], sp["i0"], sp["i1"]] for sp in plan]
-    secs = feats["n"] / fps
+    # frame range to render (default: the whole song)
+    n0 = max(0, int(round((start or 0.0) * fps)))
+    n1 = min(feats["n"], max(n0 + 1, int(round(
+        (end if end is not None else feats["n"] / fps) * fps))))
+    secs = (n1 - n0) / fps
     mode = "GPU render + NVENC" if (use_gpu and use_nvenc) else \
            "GPU render" if use_gpu else \
            "NVENC" if use_nvenc else "CPU"
-    print(f"rendering {feats['n']} frames ({secs:.1f}s) at {W}x{H}@{fps} "
+    print(f"rendering {n1 - n0} frames ({secs:.1f}s) at {W}x{H}@{fps} "
           f"[{mode}]...")
     print("scene plan:")
     for sp in plan:
@@ -2062,12 +2354,15 @@ def render_video(audio, out, W=1280, H=720, fps=30, adelay=40,
               f"{sp['phase']:10s} -> {sp['scene']}")
 
     a_ok, nch = has_audio(audio)
+    # the audio delay only makes sense at the very start of the song
+    a_delay = adelay if n0 == 0 else 0
     cmd = [ffmpeg_exe(), "-y",
            "-f", "rawvideo", "-vcodec", "rawvideo",
            "-s", f"{W}x{H}", "-pix_fmt", "rgb24",
            "-r", str(fps), "-i", "pipe:0"]
     if a_ok:
-        cmd += ["-i", audio, "-map", "0:v:0", "-map", "1:a:0"]
+        cmd += ["-ss", f"{n0 / fps:.3f}", "-i", audio,
+                "-map", "0:v:0", "-map", "1:a:0"]
     if use_nvenc:
         mbit = max(4, int(round(W * H / 1e6 * 8)))
         cmd += ["-c:v", "h264_nvenc", "-preset", "p5",
@@ -2077,15 +2372,15 @@ def render_video(audio, out, W=1280, H=720, fps=30, adelay=40,
         cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
                 "-pix_fmt", "yuv420p"]
     if a_ok:
-        if adelay > 0:
-            cmd += ["-af", "adelay=" + "|".join([str(adelay)] * nch)]
+        if a_delay > 0:
+            cmd += ["-af", "adelay=" + "|".join([str(a_delay)] * nch)]
         cmd += ["-c:a", "aac", "-b:a", "192k"]
     cmd += ["-shortest", out]
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     try:
         render(feats, plan, W, H, fps, proc.stdin, use_gpu, progress_cb,
-               beats=beats)
+               beats=beats, i0=n0, i1=n1)
     except BrokenPipeError:
         proc.wait()
         raise RuntimeError("ffmpeg encoding failed")
@@ -2094,6 +2389,12 @@ def render_video(audio, out, W=1280, H=720, fps=30, adelay=40,
     rc = proc.wait()
     if rc != 0:
         raise RuntimeError("ffmpeg encoding failed")
+    if effects:
+        print("post pass: applying %d effect(s)..." % len(effects))
+        apply_effects(out, effects, fps, W, H, n1 - n0, n0 / fps,
+                      use_nvenc, a_ok)
+        if progress_cb:
+            progress_cb(n1 - n0, n1 - n0)
     return plan, spans
 
 

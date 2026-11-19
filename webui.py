@@ -262,6 +262,9 @@ def api_render():
     spans_frames = ([[sp[0], int(round(sp[1] * fps)), int(round(sp[2] * fps))]
                     for sp in spans] if spans else None)
     beats = d.get("beats") or None
+    start = d.get("start")
+    end = d.get("end")
+    effects = d.get("effects") or None
 
     out = os.path.join(out_dir, out_name)
     use_gpu = CUDA
@@ -279,7 +282,8 @@ def api_render():
             M.render_video(audio, out, W=W, H=H, fps=fps, adelay=adelay,
                            use_gpu=use_gpu, use_nvenc=use_nvenc,
                            phase_spans=spans_frames, progress_cb=cb,
-                           beats=beats)
+                           beats=beats, start=start, end=end,
+                           effects=effects)
             with jobs_lock:
                 jobs[job].update(state="done", out=out)
         except Exception as ex:
